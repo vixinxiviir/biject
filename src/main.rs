@@ -21,6 +21,12 @@ enum Commands {
         #[arg(short, long)]
         target: String,
 
+        #[arg(long, help = "Table or SQL query for the source (required when source is a database URI)")]
+        source_query: Option<String>,
+
+        #[arg(long, help = "Table or SQL query for the target (required when target is a database URI)")]
+        target_query: Option<String>,
+
         #[arg(long, help = "Optional path to a JSON schema policy/contract file")]
         policy: Option<String>,
     },
@@ -30,6 +36,12 @@ enum Commands {
 
         #[arg(short, long)]
         target: String,
+
+        #[arg(long, help = "Table or SQL query for the source (required when source is a database URI)")]
+        source_query: Option<String>,
+
+        #[arg(long, help = "Table or SQL query for the target (required when target is a database URI)")]
+        target_query: Option<String>,
 
         #[arg(short, long, required = true)]
         key: Vec<String>,
@@ -105,13 +117,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Schema {
             source,
             target,
+            source_query,
+            target_query,
             policy,
         } => {
-            schema::schema_diff(&source, &target, policy.as_deref())?;
+            schema::schema_diff(&source, &target, source_query.as_deref(), target_query.as_deref(), policy.as_deref())?;
         }
         Commands::Data {
             source,
             target,
+            source_query,
+            target_query,
             key,
             output,
             format,
@@ -127,6 +143,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &source,
                 &target,
                 &key,
+                source_query.as_deref(),
+                target_query.as_deref(),
                 output.as_deref(),
                 format,
                 temp,
