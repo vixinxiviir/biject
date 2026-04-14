@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use crate::connectors;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -17,7 +16,6 @@ pub enum SchemaDiffError {
     MissingColumnType(String),
     PolicyViolation(String),
     InvalidPolicyFile(String),
-    DataLoadError(String),
 }
 
 impl std::fmt::Display for SchemaDiffError {
@@ -31,9 +29,6 @@ impl std::fmt::Display for SchemaDiffError {
             }
             SchemaDiffError::InvalidPolicyFile(msg) => {
                 write!(f, "Invalid schema policy file: {}", msg)
-            }
-            SchemaDiffError::DataLoadError(msg) => {
-                write!(f, "Data load error: {}", msg)
             }
         }
     }
@@ -182,19 +177,16 @@ fn run_schema_diff_inner(df1: &DataFrame, df2: &DataFrame, source_label: &str, t
     })
 }
 
-pub fn schema_diff(source: &str, target: &str, source_query: Option<&str>, target_query: Option<&str>, policy_path: Option<&str>) -> Result<(), SchemaDiffError> {
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| SchemaDiffError::DataLoadError(format!("Failed to create async runtime: {}", e)))?;
+pub fn schema_diff(path1: &str, path2: &str, policy_path: Option<&str>) -> Result<(), SchemaDiffError> {
+    let df1 = CsvReader::from_path(path1)?
+        .infer_schema(Some(100))
+        .has_header(true)
+        .finish()?;
 
-    let source_config = connectors::parse_source_uri(source, source_query)
-        .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
-    let target_config = connectors::parse_source_uri(target, target_query)
-        .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
-
-    let df1 = rt.block_on(connectors::load_source(&source_config))
-        .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
-    let df2 = rt.block_on(connectors::load_source(&target_config))
-        .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
+    let df2 = CsvReader::from_path(path2)?
+        .infer_schema(Some(100))
+        .has_header(true)
+        .finish()?;
 
     let source_schema = schema_map(&df1)?;
     let target_schema = schema_map(&df2)?;
@@ -229,8 +221,8 @@ pub fn schema_diff(source: &str, target: &str, source_query: Option<&str>, targe
 
     println!("Schema Comparison Results");
     println!("---------------------------");
-    println!("Source file: {}", source);
-    println!("Target file: {}", target);
+    println!("Source file: {}", path1);
+    println!("Target file: {}", path2);
 
     if added.is_empty() {
         println!("No columns added in target.");

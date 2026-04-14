@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::Local;
 use clap::ValueEnum;
-use crate::connectors;
 use polars::prelude::*;
 use prettytable::{row, Table};
 use serde::{Deserialize, Serialize};
@@ -77,17 +76,6 @@ impl From<anyhow::Error> for DataDiffError {
     fn from(err: anyhow::Error) -> Self {
         DataDiffError::DataContentError(err.to_string())
     }
-}
-
-fn load_df(
-    source: &str,
-    query: Option<&str>,
-    rt: &tokio::runtime::Runtime,
-) -> Result<DataFrame, DataDiffError> {
-    let config = connectors::parse_source_uri(source, query)
-        .map_err(|e| DataDiffError::DataContentError(e.to_string()))?;
-    rt.block_on(connectors::load_source(&config))
-        .map_err(|e| DataDiffError::DataContentError(e.to_string()))
 }
 
 #[derive(Debug)]
@@ -170,8 +158,6 @@ struct BatchManifestEntry {
     name: Option<String>,
     source: String,
     target: String,
-    source_query: Option<String>,
-    target_query: Option<String>,
     key: Option<String>,
     output_base: Option<String>,
     exclude_columns: Option<String>,
@@ -185,8 +171,6 @@ struct BatchCsvManifestEntry {
     name: Option<String>,
     source: String,
     target: String,
-    source_query: Option<String>,
-    target_query: Option<String>,
     key: Option<String>,
     output_base: Option<String>,
     exclude_columns: Option<String>,
@@ -345,11 +329,9 @@ fn values_equal(left: &polars::prelude::AnyValue, right: &polars::prelude::AnyVa
 }
 
 pub fn data_diff(
-    source: &str,
-    target: &str,
+    path1: &str,
+    path2: &str,
     keys: &[String],
-    source_query: Option<&str>,
-    target_query: Option<&str>,
     output: Option<&str>,
     format: Option<ExportFormat>,
     temp: bool,
@@ -366,18 +348,14 @@ pub fn data_diff(
         include_column_stats: !diffs_only || !temp || output.is_some() || format.is_some(),
     };
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| anyhow!("Failed to create async runtime: {}", e))?;
-    let df1 = load_df(source, source_query, &rt)?;
-    let df2 = load_df(target, target_query, &rt)?;
-    let export_payload = diff_dataframes(df1, df2, source, target, keys, &options)?;
+    let export_payload = compute_diff_export(path1, path2, keys, &options)?;
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&export_payload)?);
         return Ok(());
     }
 
-    render_diff_report(source, target, keys, &export_payload, diffs_only);
+    render_diff_report(path1, path2, keys, &export_payload, diffs_only);
 
     if temp {
         return Ok(());
@@ -388,7 +366,7 @@ pub fn data_diff(
         let export_base = export_path_in_folder(&export_folder, output_path);
         export_diff(export_base.to_str().unwrap(), export_format, &export_payload)?;
         println!("\nExported results to: {}", export_folder.display());
-    } else if let Some((prompt_path, prompt_format)) = prompt_for_export(source, target)? {
+    } else if let Some((prompt_path, prompt_format)) = prompt_for_export(path1, path2)? {
         let export_folder = create_export_folder()?;
         let export_base = export_path_in_folder(&export_folder, &prompt_path);
         export_diff(export_base.to_str().unwrap(), prompt_format, &export_payload)?;
@@ -414,10 +392,7 @@ pub fn batch_diff(
         return Err(anyhow!("At least one key column must be specified"));
     }
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| anyhow!("Failed to create async runtime: {}", e))?;
-
-    let manifest_entries = read_batch_manifest(manifest_path, manifest_format.clone())?;
+    let manifest_entries = read_batch_manifest(manifest_path, manifest_format)?;
     if manifest_entries.is_empty() {
         return Err(anyhow!("Batch manifest does not contain any source/target pairs"));
     }
@@ -449,15 +424,7 @@ pub fn batch_diff(
             include_column_stats: output.is_some() || format.is_some() || !pair_diffs_only,
         };
 
-        let source_label = entry.source.clone();
-        let target_label = entry.target.clone();
-        let pair_result = (|| -> Result<DiffExport, DataDiffError> {
-            let df1 = load_df(&source_label, entry.source_query.as_deref(), &rt)?;
-            let df2 = load_df(&target_label, entry.target_query.as_deref(), &rt)?;
-            diff_dataframes(df1, df2, &source_label, &target_label, &pair_keys, &pair_options)
-        })();
-
-        match pair_result {
+        match compute_diff_export(&entry.source, &entry.target, &pair_keys, &pair_options) {
             Ok(export_payload) => {
                 for changed_column in &export_payload.change_summary {
                     *aggregated_columns
@@ -814,8 +781,6 @@ fn read_batch_manifest_csv(path: &str) -> Result<Vec<BatchManifestEntry>> {
             name: row.name,
             source: row.source,
             target: row.target,
-            source_query: row.source_query,
-            target_query: row.target_query,
             key: row.key,
             output_base: row.output_base,
             exclude_columns: row.exclude_columns,

@@ -30,7 +30,7 @@ source=(
   "${pkgname}-${pkgver}.tar.gz::https://github.com/vixinxiviir/datadiff/archive/refs/tags/v${pkgver}.tar.gz"
   "${pkgname}-vendor-${pkgver}.tar.zst::https://github.com/vixinxiviir/datadiff/releases/download/v${pkgver}/${pkgname}-vendor-${pkgver}.tar.zst"
 )
-sha256sums=('SKIP' 'SKIP')
+sha256sums=('55a3d091b67a1d29e5ace345aa24f75fdedba604d207e57bb5998d62e8d307fe' '4f564c8b5af1669f3455ce935bcc433db4f61ba6d10af35eb21d8eddf3e96164')
 
 prepare() {
   cd "${srcdir}/${pkgname}-${pkgver}"
