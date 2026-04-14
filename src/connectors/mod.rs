@@ -135,3 +135,81 @@ pub async fn load_source(config: &SourceConfig) -> Result<DataFrame, ConnectorEr
         }
     }
 }
+
+/// Parse a source string into a [`SourceConfig`].
+///
+/// Recognised schemes:
+/// - `postgres://user:password@host[:port]/database`
+/// - `mysql://user:password@host[:port]/database`
+/// - `sqlserver://user:password@host[:port]/database`
+/// - `sqlite:///path/to/file.db`
+/// - Any other value is treated as a CSV file path.
+///
+/// For all database sources, `query` must supply a table reference
+/// (`schema.table` or a full `SELECT` statement).
+pub fn parse_source_uri(source: &str, query: Option<&str>) -> Result<SourceConfig, ConnectorError> {
+    if let Some(rest) = source.strip_prefix("postgres://") {
+        let (username, password, host, port, database) = parse_db_userinfo_netloc(rest)?;
+        let query = require_query(query)?;
+        Ok(SourceConfig::Postgres { host, port, database, username, password, query })
+    } else if let Some(rest) = source.strip_prefix("mysql://") {
+        let (username, password, host, port, database) = parse_db_userinfo_netloc(rest)?;
+        let query = require_query(query)?;
+        Ok(SourceConfig::Mysql { host, port, database, username, password, query })
+    } else if let Some(rest) = source.strip_prefix("sqlserver://") {
+        let (username, password, host, port, database) = parse_db_userinfo_netloc(rest)?;
+        let query = require_query(query)?;
+        Ok(SourceConfig::SqlServer { host, port, database, username, password, query })
+    } else if let Some(rest) = source.strip_prefix("sqlite://") {
+        let query = require_query(query)?;
+        let path = sqlite_path_from_rest(rest);
+        Ok(SourceConfig::Sqlite { path, query })
+    } else {
+        Ok(SourceConfig::File { path: source.to_string() })
+    }
+}
+
+fn require_query(query: Option<&str>) -> Result<String, ConnectorError> {
+    query
+        .filter(|q| !q.is_empty())
+        .map(|q| q.to_string())
+        .ok_or_else(|| ConnectorError::ConnectionFailed(
+            "A table name or SQL query is required for database sources \
+             (use --source-query / --target-query)".to_string(),
+        ))
+}
+
+/// Parse the `user:password@host[:port]/database` portion of a DB URI.
+fn parse_db_userinfo_netloc(
+    rest: &str,
+) -> Result<(String, String, String, Option<u16>, String), ConnectorError> {
+    let err = || ConnectorError::ConnectionFailed(
+        "Expected URI format: user:password@host[:port]/database".to_string(),
+    );
+    let (userinfo, after_at) = rest.split_once('@').ok_or_else(err)?;
+    let (username, password) = userinfo.split_once(':').ok_or_else(err)?;
+    let (netloc, database) = after_at.split_once('/').ok_or_else(err)?;
+    let (host, port) = if let Some((h, p)) = netloc.split_once(':') {
+        let port = p.parse::<u16>().map_err(|_| {
+            ConnectorError::ConnectionFailed(format!("Invalid port number: {}", p))
+        })?;
+        (h.to_string(), Some(port))
+    } else {
+        (netloc.to_string(), None)
+    };
+    Ok((username.to_string(), password.to_string(), host, port, database.to_string()))
+}
+
+/// Derive the filesystem path from the portion of a `sqlite://` URI after the scheme.
+fn sqlite_path_from_rest(rest: &str) -> String {
+    if rest.starts_with('/') {
+        // sqlite:///absolute/path  →  /absolute/path  (Unix)
+        // sqlite:///C:/path        →  C:/path          (Windows, strip leading /)
+        #[cfg(unix)]
+        { return rest.to_string(); }
+        #[cfg(not(unix))]
+        { return rest.trim_start_matches('/').to_string(); }
+    }
+    // Relative path: sqlite://relative/db.sqlite  →  relative/db.sqlite
+    rest.to_string()
+}
