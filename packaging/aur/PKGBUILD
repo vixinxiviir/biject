@@ -1,12 +1,14 @@
-pkgname=datadiff
-pkgver=0.2.2
+pkgname=biject
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="Schema-aware data diff tool with a Rust CLI and Tauri desktop UI"
 arch=('x86_64')
-url="https://github.com/vixinxiviir/datadiff"
+url="https://github.com/vixinxiviir/biject"
 license=('GPL3')
-provides=('datadiff-gui')
-conflicts=('datadiff-gui' 'datadiff-bin' 'datadiff-gui-bin')
+provides=('biject-gui')
+# Formerly published as 'datadiff'; replaces= migrates existing installs on upgrade.
+replaces=('datadiff' 'datadiff-gui')
+conflicts=('biject-gui' 'biject-bin' 'biject-gui-bin' 'datadiff' 'datadiff-gui')
 depends=(
   'glibc'
   'gcc-libs'
@@ -27,8 +29,8 @@ makedepends=(
   'sqlite'
 )
 source=(
-  "${pkgname}-${pkgver}.tar.gz::https://github.com/vixinxiviir/datadiff/archive/refs/tags/v${pkgver}.tar.gz"
-  "${pkgname}-vendor-${pkgver}.tar.zst::https://github.com/vixinxiviir/datadiff/releases/download/v${pkgver}/${pkgname}-vendor-${pkgver}.tar.zst"
+  "${pkgname}-${pkgver}.tar.gz::https://github.com/vixinxiviir/biject/archive/refs/tags/v${pkgver}.tar.gz"
+  "${pkgname}-vendor-${pkgver}.tar.zst::https://github.com/vixinxiviir/biject/releases/download/v${pkgver}/${pkgname}-vendor-${pkgver}.tar.zst"
 )
 sha256sums=('SKIP' 'SKIP')
 
@@ -54,21 +56,21 @@ build() {
 
   export CARGO_TARGET_DIR="${srcdir}/target"
 
-  cargo build --frozen --release --locked --bin datadiff
+  cargo build --frozen --release --locked --bin biject
   cargo build --frozen --release --locked --manifest-path tauri-app/src-tauri/Cargo.toml
 }
 
 package() {
   cd "${srcdir}/${pkgname}-${pkgver}"
 
-  install -Dm755 "${srcdir}/target/release/datadiff" "${pkgdir}/usr/bin/datadiff"
-  install -Dm755 "${srcdir}/target/release/datadiff-gui" "${pkgdir}/usr/bin/datadiff-gui"
+  install -Dm755 "${srcdir}/target/release/biject" "${pkgdir}/usr/bin/biject"
+  install -Dm755 "${srcdir}/target/release/biject-gui" "${pkgdir}/usr/bin/biject-gui"
 
-  install -Dm644 packaging/aur/datadiff.desktop "${pkgdir}/usr/share/applications/datadiff.desktop"
+  install -Dm644 packaging/aur/biject.desktop "${pkgdir}/usr/share/applications/biject.desktop"
 
-  install -Dm644 tauri-app/src-tauri/icons/32x32.png "${pkgdir}/usr/share/icons/hicolor/32x32/apps/datadiff.png"
-  install -Dm644 tauri-app/src-tauri/icons/128x128.png "${pkgdir}/usr/share/icons/hicolor/128x128/apps/datadiff.png"
-  install -Dm644 tauri-app/src-tauri/icons/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/datadiff.png"
+  install -Dm644 tauri-app/src-tauri/icons/32x32.png "${pkgdir}/usr/share/icons/hicolor/32x32/apps/biject.png"
+  install -Dm644 tauri-app/src-tauri/icons/128x128.png "${pkgdir}/usr/share/icons/hicolor/128x128/apps/biject.png"
+  install -Dm644 tauri-app/src-tauri/icons/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/biject.png"
 
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

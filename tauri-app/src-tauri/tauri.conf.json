@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DataDiff",
-  "version": "0.2.0",
-  "identifier": "io.github.vixinxiviir.datadiff",
+  "productName": "Bijection",
+  "version": "0.3.0",
+  "identifier": "io.github.vixinxiviir.biject",
   "build": {
     "frontendDist": "../ui"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "DataDiff",
+        "title": "Bijection",
         "width": 1100,
         "height": 760,
         "resizable": true
@@ -25,7 +25,7 @@
     "targets": "all",
     "category": "Utility",
     "shortDescription": "Schema-aware CSV and database diff tool",
-    "longDescription": "DataDiff compares CSV files and database queries, highlights row and schema changes, and ships with both a Rust CLI and a Tauri desktop app.",
+    "longDescription": "Bijection compares CSV files and database queries, highlights row and schema changes, and ships with both a Rust CLI and a Tauri desktop app.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

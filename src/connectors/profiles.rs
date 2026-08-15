@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const APP_NAME: &str = "datadiff";
+// Used for both the config directory and the OS keychain service name.
+// Changed from "datadiff" in 0.3.0 — see MIGRATING.md; pre-0.3.0 profiles and
+// saved passwords are not read from the old location.
+const APP_NAME: &str = "biject";
 const PROFILES_FILE: &str = "profiles.json";
 
 /// Connection profile metadata (no password — stored in OS keychain).

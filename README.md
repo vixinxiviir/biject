@@ -1,20 +1,25 @@
-# datadiff
+# Bijection
 
 A schema-aware data diff tool with both a Rust CLI and a Tauri desktop UI.
+
+> **Renamed in 0.3.0.** This project was previously called `datadiff`. The crate,
+> binary, and command are now `biject`. Nothing was removed and no behavior
+> changed — see [MIGRATING.md](MIGRATING.md), which covers the one manual step
+> for saved connection profiles.
 
 Compare schemas for breaking changes, find modified rows with configurable tolerance, and review differences through either scripted CLI workflows or an interactive desktop app.
 
 The project currently ships in two forms:
 
-- `datadiff` — the Rust command-line interface for scripted and batch workflows
-- `datadiff-gui` — the Tauri desktop app for interactive schema and data comparisons
+- `biject` — the Rust command-line interface for scripted and batch workflows
+- `biject-gui` — the Tauri desktop app for interactive schema and data comparisons
 
 ## Support Matrix
 
 | Surface | Sources | Best for |
 | --- | --- | --- |
-| `datadiff` CLI | CSV files | automation, CI checks, manifest-driven batch runs |
-| `datadiff-gui` desktop app | CSV, SQL Server, PostgreSQL, MySQL/MariaDB, SQLite | ad hoc inspection, side-by-side comparisons, saved connection profiles |
+| `biject` CLI | CSV files | automation, CI checks, manifest-driven batch runs |
+| `biject-gui` desktop app | CSV, SQL Server, PostgreSQL, MySQL/MariaDB, SQLite | ad hoc inspection, side-by-side comparisons, saved connection profiles |
 
 ## Features
 
@@ -34,12 +39,12 @@ Tagged releases are the intended stable installation target. Source builds remai
 ### From Source
 
 ```bash
-git clone https://github.com/vixinxiviir/datadiff.git
-cd datadiff
+git clone https://github.com/vixinxiviir/biject.git
+cd biject
 cargo install --path .
 ```
 
-This builds and installs the `datadiff` binary to your Cargo bin directory (usually `~/.cargo/bin`).
+This builds and installs the `biject` binary to your Cargo bin directory (usually `~/.cargo/bin`).
 
 ### Desktop App From Source
 
@@ -47,7 +52,7 @@ This builds and installs the `datadiff` binary to your Cargo bin directory (usua
 cargo build --release --manifest-path tauri-app/src-tauri/Cargo.toml
 ```
 
-The desktop binary is produced at `tauri-app/src-tauri/target/release/datadiff-gui` on Linux and macOS, or `datadiff-gui.exe` on Windows.
+The desktop binary is produced at `tauri-app/src-tauri/target/release/biject-gui` on Linux and macOS, or `biject-gui.exe` on Windows.
 
 ### Release Artifacts
 
@@ -68,14 +73,14 @@ For source builds of the current connectors, you should also expect build-time d
 ### Verify Installation
 
 ```bash
-datadiff --version
-datadiff --help
+biject --version
+biject --help
 ```
 
 For the desktop app, launch:
 
 ```bash
-datadiff-gui
+biject-gui
 ```
 
 ## Quick Start
@@ -84,7 +89,7 @@ datadiff-gui
 
 Use the desktop app when you want to diff database queries or inspect changes interactively:
 
-1. Launch `datadiff-gui`.
+1. Launch `biject-gui`.
 2. Choose the Data Diff or Schema Diff tab.
 3. Select CSV, SQL Server, PostgreSQL, MySQL/MariaDB, or SQLite for each side.
 4. For database sources, optionally save connection profiles and reuse them later.
@@ -95,7 +100,7 @@ Use the desktop app when you want to diff database queries or inspect changes in
 Compare two CSV files to see what columns changed:
 
 ```bash
-datadiff schema \
+biject schema \
   --source gold_customers.csv \
   --target silver_customers.csv
 ```
@@ -111,7 +116,7 @@ Output includes:
 Find which rows were added, removed, or modified:
 
 ```bash
-datadiff data \
+biject data \
   --source gold_customers.csv \
   --target silver_customers.csv \
   --key customer_id
@@ -131,7 +136,7 @@ Options:
 Example with filters:
 
 ```bash
-datadiff data \
+biject data \
   --source raw_events.csv \
   --target processed_events.csv \
   --key event_id \
@@ -147,7 +152,7 @@ datadiff data \
 Run multiple file pair comparisons and get an aggregate summary:
 
 ```bash
-datadiff batch \
+biject batch \
   --manifest pairs.json \
   --key id \
   --output ./batch_results \
@@ -202,7 +207,7 @@ orders_daily_check,data/orders_daily.csv,data/orders_staging.csv,"order_id,order
 Enforce structural contracts with a JSON policy file:
 
 ```bash
-datadiff schema \
+biject schema \
   --source gold_schema.csv \
   --target silver_schema.csv \
   --policy schema-contract.json
@@ -286,7 +291,7 @@ Total rows modified across all pairs: 125
 
 ```bash
 # Check if a new table version is backward compatible
-datadiff schema \
+biject schema \
   --source warehouse/events_v2.csv \
   --target warehouse/events_v3.csv \
   --policy warehouse/schema-policies.json
@@ -296,7 +301,7 @@ datadiff schema \
 
 ```bash
 # Compare daily ETL inputs to see what changed
-datadiff data \
+biject data \
   --source raw/daily_2026-03-28.csv \
   --target raw/daily_2026-03-29.csv \
   --key transaction_id \
@@ -309,13 +314,13 @@ datadiff data \
 
 ```bash
 # Run schema checks on all updated tables after a deployment
-datadiff schema \
+biject schema \
   --source prod_snapshot.csv \
   --target staging_snapshot.csv \
   --policy prod-schema-contract.json
 
 # If schema is OK, check data integrity
-datadiff batch \
+biject batch \
   --manifest prod_validation_pairs.json \
   --key id \
   --output ./release_validation \
@@ -341,10 +346,10 @@ Verify the input is a standard CSV with the expected delimiter, quotes, and enco
 Use them together. The CLI requires `--output` and `--format` as a pair, while `--temp` is an alternative output mode.
 
 **Batch run fails on one pair but not others**  
-Run the failing pair directly with `datadiff data` using the same filters, or rerun the batch with `--fail-fast` to stop at the first failing entry.
+Run the failing pair directly with `biject data` using the same filters, or rerun the batch with `--fail-fast` to stop at the first failing entry.
 
 **Database sources are not available in the CLI**  
-That is expected. Database connectors currently live in the desktop app, not the `datadiff` CLI.
+That is expected. Database connectors currently live in the desktop app, not the `biject` CLI.
 
 **Type classification seems wrong**  
 Polars infers schema from the first 100 rows. If a CSV column contains mixed types, normalize the input first so the sampled rows reflect the full dataset.
@@ -353,10 +358,35 @@ Polars infers schema from the first 100 rows. If a CSV column contains mixed typ
 
 Contributions are welcome. Open an issue for bugs, feature requests, or release packaging problems, and use pull requests for scoped changes.
 
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) first — it covers the development
+workflow and the inbound license grant that pull requests require. Commits need
+a `Signed-off-by:` line (`git commit -s`).
+
+## License
+
+Bijection is free software under **GPL-3.0-only**. See [LICENSE](LICENSE).
+
+Commercial licenses are available for use that cannot comply with the GPL, and
+`biject migrate` — migration and rollback DDL generation — is a separate paid
+product. See [LICENSING.md](LICENSING.md) for the full picture, including the
+commitment that nothing currently free will become paid.
+
+Dependency licenses are inventoried in [docs/licensing.md](docs/licensing.md).
+The project name is covered by the [NOTICE](NOTICE) file, not by the GPL.
 
 ## Roadmap
 
-- [ ] Additional database connectors beyond the current SQL Server, PostgreSQL, MySQL/MariaDB, and SQLite support
-- [ ] Streaming mode for files larger than RAM
-- [ ] Plugin system for custom diff rules
-- [ ] Scheduled reports and alerting
+Near term:
+
+- [ ] Test coverage for the data diff path
+- [ ] Migration and rollback DDL generation for PostgreSQL (paid)
+
+Later:
+
+- [ ] Checksum and sampling comparison for warehouse-scale tables
+- [ ] Cloud warehouse connectors (Snowflake, Databricks, BigQuery)
+- [ ] Cross-engine schema diff and type mapping
+- [ ] Additional SQL dialects for migration generation
+
+Explicitly not planned: hosted or scheduled components, subscriptions, accounts,
+and any mode that executes generated DDL against a live database.

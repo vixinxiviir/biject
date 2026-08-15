@@ -50,7 +50,7 @@ jobs:
       - name: Validate desktop entry
         run: |
           sudo apt-get install -y desktop-file-utils
-          desktop-file-validate packaging/aur/datadiff.desktop
+          desktop-file-validate packaging/aur/biject.desktop
 
   linux-artifacts:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -88,10 +88,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           cargo vendor --locked --versioned-dirs vendor --sync tauri-app/src-tauri/Cargo.toml > /tmp/vendor-config.toml
           mkdir -p dist
-          tar --zstd -cf "dist/datadiff-vendor-${VERSION}.tar.zst" vendor
+          tar --zstd -cf "dist/biject-vendor-${VERSION}.tar.zst" vendor
 
       - name: Build CLI binary
-        run: cargo build --frozen --release --locked --bin datadiff
+        run: cargo build --frozen --release --locked --bin biject
 
       - name: Build desktop binary
         run: cargo build --frozen --release --locked --manifest-path tauri-app/src-tauri/Cargo.toml
@@ -100,22 +100,22 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          cp target/release/datadiff dist/
-          cp tauri-app/src-tauri/target/release/datadiff-gui dist/
-          cp packaging/aur/datadiff.desktop dist/
+          cp target/release/biject dist/
+          cp tauri-app/src-tauri/target/release/biject-gui dist/
+          cp packaging/aur/biject.desktop dist/
           cp packaging/aur/PKGBUILD dist/
           cp packaging/aur/.SRCINFO dist/
           cp LICENSE dist/
-          curl -L -o "dist/datadiff-${VERSION}.tar.gz" "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          curl -L -o "dist/biject-${VERSION}.tar.gz" "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
           (
             cd dist
-            sha256sum "datadiff-${VERSION}.tar.gz" "datadiff-vendor-${VERSION}.tar.zst" > aur-sha256sums.txt
+            sha256sum "biject-${VERSION}.tar.gz" "biject-vendor-${VERSION}.tar.zst" > aur-sha256sums.txt
           )
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: datadiff-linux-${{ github.ref_name }}
+          name: biject-linux-${{ github.ref_name }}
           path: dist/
 
       - name: Publish GitHub release assets

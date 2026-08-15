@@ -1109,7 +1109,7 @@ fn create_export_folder() -> Result<PathBuf> {
 /// Get the export path within a folder (creates folder if needed)
 fn export_path_in_folder(folder_path: &Path, base_name: &str) -> PathBuf {
     let base = if base_name.is_empty() {
-        "datadiff_export"
+        "biject_export"
     } else {
         base_name
     };
@@ -1176,7 +1176,7 @@ fn csv_output_path(base_path: &Path, suffix: &str) -> PathBuf {
         .or_else(|| base_path.file_name())
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
-        .unwrap_or("datadiff_export");
+        .unwrap_or("biject_export");
 
     parent.join(format!("{stem}_{suffix}.csv"))
 }

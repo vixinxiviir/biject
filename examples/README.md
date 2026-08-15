@@ -1,6 +1,6 @@
 # Examples
 
-Quick start examples for datadiff.
+Quick start examples for Bijection.
 
 ## Files
 
@@ -16,7 +16,7 @@ From the repo root:
 ### Schema Comparison
 
 ```bash
-datadiff schema \
+biject schema \
   --source examples/customers_v1.csv \
   --target examples/customers_v2.csv
 ```
@@ -24,7 +24,7 @@ datadiff schema \
 ### Schema with Policy Validation
 
 ```bash
-datadiff schema \
+biject schema \
   --source examples/customers_v1.csv \
   --target examples/customers_v2.csv \
   --policy examples/schema-policy.json
@@ -33,7 +33,7 @@ datadiff schema \
 ### Data Diff
 
 ```bash
-datadiff data \
+biject data \
   --source examples/customers_v1.csv \
   --target examples/customers_v2.csv \
   --key customer_id
@@ -42,7 +42,7 @@ datadiff data \
 ### Data Diff with Stats Only
 
 ```bash
-datadiff data \
+biject data \
   --source examples/customers_v1.csv \
   --target examples/customers_v2.csv \
   --key customer_id \
@@ -52,7 +52,7 @@ datadiff data \
 ### Batch Comparison
 
 ```bash
-datadiff batch \
+biject batch \
   --manifest examples/batch-manifest.json \
   --key customer_id
 ```

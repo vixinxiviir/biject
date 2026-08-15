@@ -29,7 +29,7 @@ pub async fn load_async(
     // The connection object must be driven to completion in a background task.
     tokio::spawn(async move {
         if let Err(e) = connection.await {
-            eprintln!("[datadiff] postgres connection error: {}", e);
+            eprintln!("[biject] postgres connection error: {}", e);
         }
     });
 

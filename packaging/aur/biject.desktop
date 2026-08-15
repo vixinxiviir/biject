@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=DataDiff
+Name=Bijection
 Comment=Schema-aware CSV and database diff tool
-Exec=datadiff-gui
-Icon=datadiff
+Exec=biject-gui
+Icon=biject
 Terminal=false
 Categories=Utility;Development;
 Keywords=csv;diff;schema;database;

@@ -1,21 +1,39 @@
 [package]
-name = "datadiff"
-version = "0.2.0"
+name = "biject"
+version = "0.3.0"
 edition = "2021"
-description = "Schema-aware data diff tool with a Rust CLI and Tauri desktop UI"
+description = "Schema-aware data and schema diff tool for CSV and SQL databases, with a Rust CLI and Tauri desktop UI"
 license = "GPL-3.0-only"
-repository = "https://github.com/vixinxiviir/datadiff"
-homepage = "https://github.com/vixinxiviir/datadiff"
+repository = "https://github.com/vixinxiviir/biject"
+homepage = "https://bijection.dev"
 readme = "README.md"
-keywords = ["diff", "csv", "schema", "database", "tauri"]
+keywords = ["diff", "schema", "database", "sql", "migration"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    # Desktop GUI ships via GitHub releases, not the crate
+    "tauri-app/",
+    # Distro packaging and CI are not consumer-facing
+    "packaging/",
+    ".github/",
+    # Internal planning notes — must never be published
+    "*-roadmap.md",
+    # Local scratch, run output, and editor/tooling state
+    "outputs-*/",
+    "myresults",
+    "source.csv",
+    "target.csv",
+    ".venv/",
+    ".vscode/",
+    ".continue/",
+    ".aider*",
+]
 
 [[bin]]
-name = "datadiff"
+name = "biject"
 path = "src/main.rs"
 
 [lib]
-name = "datadiff"
+name = "biject"
 path = "src/lib.rs"
 
 [dependencies]

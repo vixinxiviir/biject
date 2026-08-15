@@ -262,6 +262,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "biject"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "colored",
+ "csv",
+ "dirs",
+ "keyring",
+ "mysql_async",
+ "polars",
+ "prettytable",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tiberius",
+ "tokio",
+ "tokio-postgres",
+ "tokio-util",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -823,29 +846,6 @@ dependencies = [
  "darling_core",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "datadiff"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "colored",
- "csv",
- "dirs",
- "keyring",
- "mysql_async",
- "polars",
- "prettytable",
- "rusqlite",
- "serde",
- "serde_json",
- "tiberius",
- "tokio",
- "tokio-postgres",
- "tokio-util",
 ]
 
 [[package]]

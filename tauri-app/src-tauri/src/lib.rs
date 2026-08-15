@@ -1,34 +1,34 @@
-use datadiff::connectors::profiles::{ConnectionProfile, ProfileError};
+use biject::connectors::profiles::{ConnectionProfile, ProfileError};
 
 // ── Profile commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn list_profiles() -> Result<Vec<ConnectionProfile>, String> {
-    datadiff::connectors::profiles::list_profiles()
+    biject::connectors::profiles::list_profiles()
         .map_err(|e: ProfileError| e.to_string())
 }
 
 #[tauri::command]
 fn save_profile(profile: ConnectionProfile, password: String) -> Result<(), String> {
-    datadiff::connectors::profiles::save_profile(profile, &password)
+    biject::connectors::profiles::save_profile(profile, &password)
         .map_err(|e: ProfileError| e.to_string())
 }
 
 #[tauri::command]
 fn update_profile(profile: ConnectionProfile, password: Option<String>) -> Result<(), String> {
-    datadiff::connectors::profiles::update_profile(profile, password.as_deref())
+    biject::connectors::profiles::update_profile(profile, password.as_deref())
         .map_err(|e: ProfileError| e.to_string())
 }
 
 #[tauri::command]
 fn delete_profile(name: String) -> Result<(), String> {
-    datadiff::connectors::profiles::delete_profile(&name)
+    biject::connectors::profiles::delete_profile(&name)
         .map_err(|e: ProfileError| e.to_string())
 }
 
 #[tauri::command]
 fn get_profile_password(name: String) -> Result<String, String> {
-    datadiff::connectors::profiles::get_password(&name)
+    biject::connectors::profiles::get_password(&name)
         .map_err(|e: ProfileError| e.to_string())
 }
 
@@ -43,7 +43,7 @@ fn run_diff(
     only_columns: Option<String>,
     numeric_tolerance: Option<f64>,
 ) -> Result<serde_json::Value, String> {
-    datadiff::data::run_diff(
+    biject::data::run_diff(
         &path1,
         &path2,
         &keys,
@@ -56,25 +56,25 @@ fn run_diff(
 
 #[tauri::command]
 async fn run_schema_diff(
-    source1: datadiff::connectors::SourceConfig,
-    source2: datadiff::connectors::SourceConfig,
-) -> Result<datadiff::schema::SchemaDiffResult, String> {
+    source1: biject::connectors::SourceConfig,
+    source2: biject::connectors::SourceConfig,
+) -> Result<biject::schema::SchemaDiffResult, String> {
     let label1 = source1.label();
     let label2 = source2.label();
-    let df1 = datadiff::connectors::load_source(&source1)
+    let df1 = biject::connectors::load_source(&source1)
         .await
         .map_err(|e| e.to_string())?;
-    let df2 = datadiff::connectors::load_source(&source2)
+    let df2 = biject::connectors::load_source(&source2)
         .await
         .map_err(|e| e.to_string())?;
-    datadiff::schema::run_schema_diff_frames(df1, df2, &label1, &label2)
+    biject::schema::run_schema_diff_frames(df1, df2, &label1, &label2)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn run_source_diff(
-    source1: datadiff::connectors::SourceConfig,
-    source2: datadiff::connectors::SourceConfig,
+    source1: biject::connectors::SourceConfig,
+    source2: biject::connectors::SourceConfig,
     keys: Vec<String>,
     exclude_columns: Option<String>,
     only_columns: Option<String>,
@@ -82,13 +82,13 @@ async fn run_source_diff(
 ) -> Result<serde_json::Value, String> {
     let label1 = source1.label();
     let label2 = source2.label();
-    let df1 = datadiff::connectors::load_source(&source1)
+    let df1 = biject::connectors::load_source(&source1)
         .await
         .map_err(|e| e.to_string())?;
-    let df2 = datadiff::connectors::load_source(&source2)
+    let df2 = biject::connectors::load_source(&source2)
         .await
         .map_err(|e| e.to_string())?;
-    datadiff::data::run_diff_frames(
+    biject::data::run_diff_frames(
         df1,
         df2,
         &label1,
