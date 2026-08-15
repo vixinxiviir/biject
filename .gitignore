@@ -4,7 +4,14 @@ tauri-app/src-tauri/target/
 
 # Generated run outputs
 /outputs-*/
-/myresults/
+/myresults
+
+# Local scratch fixtures (real fixtures live in examples/)
+/source.csv
+/target.csv
+
+# Internal planning notes — not for the public repo or the published crate
+*-roadmap.md
 
 # Tauri mobile icon outputs
 tauri-app/src-tauri/icons/android/
@@ -40,3 +47,4 @@ tauri-app/src-tauri/*.exe
 # Node (if npm is ever added)
 node_modules/
 tauri-app/node_modules/
+.aider*

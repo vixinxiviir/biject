@@ -1,5 +1,0 @@
-user_id,date,name,salary,status
-1,2024-01-01,Alice,50000,active
-1,2024-01-02,Alice,50000,active
-2,2024-01-01,Bob,60000,active
-3,2024-01-01,Charlie,55000,inactive

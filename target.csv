@@ -1,5 +1,0 @@
-user_id,date,name,salary,status,department
-1,2024-01-01,Alice,51000,active,Engineering
-1,2024-01-02,Alice,50000,active,Engineering
-2,2024-01-01,Bob,60000,inactive,Sales
-4,2024-01-01,Diana,65000,active,Sales
