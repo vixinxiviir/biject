@@ -1,0 +1,49 @@
+Bijection
+Copyright (c) 2026 Cody Byers
+
+This product is licensed under the GNU General Public License v3.0 only.
+See the LICENSE file for the full license text, and LICENSING.md for how the
+free and commercial offerings relate.
+
+
+TRADEMARK NOTICE
+----------------
+
+"Bijection" and "biject" are unregistered trademarks of Cody Byers, used to
+identify this project and the software distributed under it.
+
+The GNU General Public License grants broad rights to the source code. It does
+not grant rights to use the project's name or marks. These are separate.
+
+You MAY, without asking:
+
+  - State truthfully that your software uses, is built on, is compatible with,
+    or is derived from Bijection.
+  - Redistribute unmodified copies of the official releases under the name
+    Bijection.
+  - Package Bijection for a distribution or package manager under its own name,
+    provided the packaged software is a faithful build of the official sources.
+  - Use the name in articles, reviews, documentation, and educational material.
+
+You MAY NOT, without written permission:
+
+  - Use "Bijection", "biject", or a confusingly similar name as the name of a
+    modified version, fork, or derivative product.
+  - Use the name or marks in a way that suggests the project endorses,
+    sponsors, or is affiliated with your product or organization.
+  - Use the name or marks as, or as part of, your own product name, company
+    name, domain name, or logo.
+
+If you distribute a modified version, the GPL requires you to mark it as
+changed. Please also give it a different name, so that users can tell your
+version and the official one apart.
+
+Requests: licensing@bijection.dev
+
+
+THIRD-PARTY SOFTWARE
+--------------------
+
+Bijection incorporates third-party open source components. Their licenses and
+attribution notices are inventoried in docs/licensing.md, and binary
+distributions ship a THIRD-PARTY-NOTICES.txt file alongside the executable.
