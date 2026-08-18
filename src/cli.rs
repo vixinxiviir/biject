@@ -67,7 +67,7 @@ pub enum Commands {
         #[arg(long, help = "Only compare these columns (comma-separated)")]
         only_columns: Option<String>,
 
-        #[arg(long, help = "Tolerance for numeric comparisons (0-1 for percentage, or absolute difference)")]
+        #[arg(long, help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)")]
         numeric_tolerance: Option<f64>,
 
         #[arg(long, help = "Show only modified rows, skip summary tables")]
@@ -98,7 +98,7 @@ pub enum Commands {
         #[arg(long, help = "Only compare these columns (comma-separated)")]
         only_columns: Option<String>,
 
-        #[arg(long, help = "Tolerance for numeric comparisons (0-1 for percentage, or absolute difference)")]
+        #[arg(long, help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)")]
         numeric_tolerance: Option<f64>,
 
         #[arg(long, help = "Show only per-pair diff counts, skip verbose summaries")]

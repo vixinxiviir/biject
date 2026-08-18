@@ -1506,3 +1506,231 @@ fn parse_export_format_input(input: &str) -> Option<ExportFormat> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use polars::prelude::AnyValue;
+
+    // ---- values_equal: no tolerance ----
+
+    #[test]
+    fn without_tolerance_values_compare_exactly() {
+        assert!(values_equal(&AnyValue::Int64(5), &AnyValue::Int64(5), None));
+        assert!(!values_equal(&AnyValue::Int64(5), &AnyValue::Int64(6), None));
+        assert!(values_equal(&AnyValue::String("a"), &AnyValue::String("a"), None));
+        assert!(!values_equal(&AnyValue::String("a"), &AnyValue::String("b"), None));
+    }
+
+    #[test]
+    fn null_equals_null_and_differs_from_a_value() {
+        assert!(values_equal(&AnyValue::Null, &AnyValue::Null, None));
+        assert!(!values_equal(&AnyValue::Null, &AnyValue::Int64(0), None));
+        // A null on either side is not numeric, so tolerance must not rescue it.
+        assert!(!values_equal(&AnyValue::Null, &AnyValue::Int64(0), Some(100.0)));
+    }
+
+    // ---- values_equal: tolerance is an ABSOLUTE difference ----
+    //
+    // The comparison is |left - right| <= tolerance and has never been
+    // proportional, despite the CLI help having once advertised "0-1 for
+    // percentage". These tests pin the absolute semantics so the help text and
+    // the implementation cannot drift apart again.
+
+    #[test]
+    fn tolerance_is_absolute_never_proportional() {
+        // 2% apart. Under percentage semantics a tolerance of 0.05 would call
+        // these equal; under absolute semantics it cannot.
+        assert!(!values_equal(
+            &AnyValue::Float64(50_000.0),
+            &AnyValue::Float64(51_000.0),
+            Some(0.05)
+        ));
+        // The same pair is equal once the tolerance genuinely covers the gap.
+        assert!(values_equal(
+            &AnyValue::Float64(50_000.0),
+            &AnyValue::Float64(51_000.0),
+            Some(1_000.0)
+        ));
+    }
+
+    #[test]
+    fn tolerance_boundary_is_inclusive() {
+        // The comparison is <=, so a difference exactly equal to the tolerance
+        // counts as equal.
+        assert!(values_equal(
+            &AnyValue::Float64(1.0),
+            &AnyValue::Float64(1.5),
+            Some(0.5)
+        ));
+        assert!(!values_equal(
+            &AnyValue::Float64(1.0),
+            &AnyValue::Float64(1.6),
+            Some(0.5)
+        ));
+    }
+
+    #[test]
+    fn tolerance_is_symmetric_and_handles_negatives() {
+        assert!(values_equal(&AnyValue::Int64(10), &AnyValue::Int64(8), Some(2.0)));
+        assert!(values_equal(&AnyValue::Int64(8), &AnyValue::Int64(10), Some(2.0)));
+        assert!(values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-7), Some(2.0)));
+        assert!(!values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-8), Some(2.0)));
+    }
+
+    #[test]
+    fn zero_tolerance_still_compares_numerically_across_types() {
+        // A zero tolerance is Some(0.0), not None, so it takes the numeric path.
+        // That makes an integer and a float of the same value compare equal,
+        // where exact AnyValue equality would not.
+        assert!(values_equal(
+            &AnyValue::Int64(5),
+            &AnyValue::Float64(5.0),
+            Some(0.0)
+        ));
+        assert!(!values_equal(&AnyValue::Int64(5), &AnyValue::Float64(5.0), None));
+    }
+
+    #[test]
+    fn tolerance_bridges_mixed_integer_and_float_widths() {
+        assert!(values_equal(
+            &AnyValue::Int32(100),
+            &AnyValue::Float64(100.4),
+            Some(0.5)
+        ));
+        assert!(values_equal(
+            &AnyValue::UInt8(7),
+            &AnyValue::Int64(7),
+            Some(0.0)
+        ));
+    }
+
+    #[test]
+    fn tolerance_is_ignored_for_non_numeric_values() {
+        // Strings are not convertible to f64, so the comparison falls through
+        // to exact equality no matter how large the tolerance is.
+        assert!(!values_equal(
+            &AnyValue::String("100"),
+            &AnyValue::String("101"),
+            Some(1_000.0)
+        ));
+        assert!(values_equal(
+            &AnyValue::String("same"),
+            &AnyValue::String("same"),
+            Some(1_000.0)
+        ));
+        assert!(!values_equal(
+            &AnyValue::Boolean(true),
+            &AnyValue::Boolean(false),
+            Some(1.0)
+        ));
+    }
+
+    #[test]
+    fn nan_is_never_equal_even_within_tolerance() {
+        // NaN comparisons are false under IEEE 754, so a NaN on either side
+        // always reports a difference. Worth pinning: it means a column of NaNs
+        // reports every row as modified rather than silently matching.
+        let nan = AnyValue::Float64(f64::NAN);
+        assert!(!values_equal(&nan, &nan, Some(1.0)));
+        assert!(!values_equal(&nan, &AnyValue::Float64(1.0), Some(1_000.0)));
+    }
+
+    // ---- column filtering ----
+
+    #[test]
+    fn key_columns_are_never_compared() {
+        let keys = vec!["id".to_string()];
+        let filters = ColumnFilterSet::new(None, None);
+        assert!(!filters.should_include("id", &keys));
+        assert!(filters.should_include("name", &keys));
+    }
+
+    #[test]
+    fn only_columns_takes_precedence_over_exclude() {
+        let keys: Vec<String> = vec![];
+        let filters = ColumnFilterSet::new(Some("name"), Some("name,email"));
+        // `only` wins outright; the exclude list is not consulted.
+        assert!(filters.should_include("name", &keys));
+        assert!(filters.should_include("email", &keys));
+        assert!(!filters.should_include("salary", &keys));
+    }
+
+    #[test]
+    fn exclude_columns_drops_only_the_named_columns() {
+        let keys: Vec<String> = vec![];
+        let filters = ColumnFilterSet::new(Some("salary,notes"), None);
+        assert!(!filters.should_include("salary", &keys));
+        assert!(!filters.should_include("notes", &keys));
+        assert!(filters.should_include("name", &keys));
+    }
+
+    #[test]
+    fn column_lists_tolerate_whitespace_and_empty_input() {
+        let parsed = parse_column_list(Some(" name , email "));
+        assert!(parsed.contains("name"));
+        assert!(parsed.contains("email"));
+        assert_eq!(parsed.len(), 2);
+
+        assert!(parse_column_list(Some("")).is_empty());
+        assert!(parse_column_list(None).is_empty());
+    }
+
+    // ---- manifest key parsing ----
+
+    #[test]
+    fn manifest_keys_split_and_trim() {
+        let parsed = parse_manifest_keys("user_id, date").unwrap();
+        assert_eq!(parsed, vec!["user_id".to_string(), "date".to_string()]);
+    }
+
+    #[test]
+    fn manifest_keys_reject_empty_and_separator_only_input() {
+        assert!(parse_manifest_keys("").is_err());
+        assert!(parse_manifest_keys("   ").is_err());
+        assert!(parse_manifest_keys(",,,").is_err());
+    }
+
+    // ---- composite keys ----
+
+    fn frame(ids: &[i64], dates: &[&str]) -> DataFrame {
+        df!("id" => ids.to_vec(), "date" => dates.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn single_key_maps_each_row_to_its_index() {
+        let df = frame(&[1, 2, 3], &["a", "b", "c"]);
+        let map = build_composite_key_map(&df, &["id".to_string()]).unwrap();
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.values().copied().collect::<HashSet<_>>(), HashSet::from([0, 1, 2]));
+    }
+
+    #[test]
+    fn composite_key_combines_all_key_columns() {
+        let df = frame(&[1, 1], &["2024-01-01", "2024-01-02"]);
+        let keys = vec!["id".to_string(), "date".to_string()];
+        let map = build_composite_key_map(&df, &keys).unwrap();
+        // A duplicated id is still two distinct rows once the date participates.
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_composite_keys_collapse_to_the_last_row() {
+        // Documents a real limitation: the key map is a HashMap, so rows sharing
+        // a composite key overwrite each other and only the last is ever
+        // compared. A source with duplicate keys is silently under-reported.
+        let df = frame(&[1, 1], &["2024-01-01", "2024-01-01"]);
+        let keys = vec!["id".to_string(), "date".to_string()];
+        let map = build_composite_key_map(&df, &keys).unwrap();
+
+        assert_eq!(df.height(), 2);
+        assert_eq!(map.len(), 1, "duplicate keys collapse");
+        assert_eq!(map.values().next().copied(), Some(1), "the later row wins");
+    }
+
+    #[test]
+    fn empty_key_list_is_rejected() {
+        let df = frame(&[1], &["a"]);
+        assert!(build_composite_key_map(&df, &[]).is_err());
+    }
+}
