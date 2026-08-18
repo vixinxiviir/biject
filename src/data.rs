@@ -1975,6 +1975,435 @@ mod tests {
         assert!(Tolerance::resolve(None, Some(f64::NAN)).is_err());
     }
 
+    // ---- diff_dataframes, end to end ----
+    //
+    // Fixtures are deliberately tiny and share a shape:
+    //   source  id 1,2,3   target  id 1,2,4
+    //   id 1 unchanged, id 2 amount 200 -> 250, id 3 source-only, id 4 target-only
+
+    fn options<'a>(
+        exclude: Option<&'a str>,
+        only: Option<&'a str>,
+        tolerance: Option<Tolerance>,
+    ) -> DiffComputationOptions<'a> {
+        DiffComputationOptions {
+            exclude_columns: exclude,
+            only_columns: only,
+            numeric_tolerance: tolerance,
+            include_column_stats: false,
+        }
+    }
+
+    fn plain() -> DiffComputationOptions<'static> {
+        options(None, None, None)
+    }
+
+    fn run(
+        df1: DataFrame,
+        df2: DataFrame,
+        keys: &[&str],
+        opts: &DiffComputationOptions,
+    ) -> DiffExport {
+        let keys: Vec<String> = keys.iter().map(|k| (*k).to_string()).collect();
+        diff_dataframes(df1, df2, "source", "target", &keys, opts).unwrap()
+    }
+
+    fn source_frame() -> DataFrame {
+        df!(
+            "id" => [1i64, 2, 3],
+            "name" => ["Alice", "Bob", "Carol"],
+            "amount" => [100i64, 200, 300],
+        )
+        .unwrap()
+    }
+
+    fn target_frame() -> DataFrame {
+        df!(
+            "id" => [1i64, 2, 4],
+            "name" => ["Alice", "Bob", "Dave"],
+            "amount" => [100i64, 250, 400],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn identical_frames_report_no_differences() {
+        let result = run(source_frame(), source_frame(), &["id"], &plain());
+        assert!(result.source_only.is_empty());
+        assert!(result.target_only.is_empty());
+        assert!(result.modified.is_empty());
+        assert_eq!(result.row_summary.modified_percent, 0.0);
+    }
+
+    #[test]
+    fn unmatched_rows_are_split_by_side() {
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        assert_eq!(result.source_only, vec!["3".to_string()]);
+        assert_eq!(result.target_only, vec!["4".to_string()]);
+    }
+
+    #[test]
+    fn changed_values_are_reported_as_modified() {
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        // id 2 changed amount; id 1 is identical and must not appear.
+        assert_eq!(result.modified, vec!["2".to_string()]);
+    }
+
+    #[test]
+    fn key_columns_are_echoed_back_in_the_export() {
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        assert_eq!(result.key_columns, vec!["id".to_string()]);
+    }
+
+    #[test]
+    fn row_summary_counts_and_percentages() {
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        let summary = &result.row_summary;
+
+        assert_eq!(summary.source_rows, 3);
+        assert_eq!(summary.target_rows, 3);
+        assert_eq!(summary.source_only_rows, 1);
+        assert_eq!(summary.target_only_rows, 1);
+        assert_eq!(summary.modified_rows, 1);
+
+        // Unmatched rows are a share of their own side's row count.
+        assert!((summary.source_only_percent - 100.0 / 3.0).abs() < 1e-9);
+        assert!((summary.target_only_percent - 100.0 / 3.0).abs() < 1e-9);
+        // Modified is a share of the *shared* rows (2 here), not of either total.
+        assert!((summary.modified_percent - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn change_summary_attributes_changes_to_the_right_column() {
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        let by_column: HashMap<&str, &ChangedColumnSummary> = result
+            .change_summary
+            .iter()
+            .map(|entry| (entry.column.as_str(), entry))
+            .collect();
+
+        assert_eq!(by_column["amount"].changed_rows, 1);
+        assert!((by_column["amount"].percent_of_changed_rows - 100.0).abs() < 1e-9);
+        // name is identical on every shared row, so it reports zero rather than
+        // being omitted — consumers can rely on every comparable column appearing.
+        assert_eq!(by_column["name"].changed_rows, 0);
+        assert_eq!(by_column["name"].percent_of_changed_rows, 0.0);
+        // The key column is never a comparable column.
+        assert!(!by_column.contains_key("id"));
+    }
+
+    #[test]
+    fn added_and_removed_columns_are_detected() {
+        let source = df!("id" => [1i64], "gone" => ["x"]).unwrap();
+        let target = df!("id" => [1i64], "fresh" => ["y"]).unwrap();
+        let result = run(source, target, &["id"], &plain());
+
+        assert_eq!(
+            result.column_summary.column_presence.added_in_target,
+            vec!["fresh".to_string()]
+        );
+        assert_eq!(
+            result.column_summary.column_presence.removed_from_source,
+            vec!["gone".to_string()]
+        );
+    }
+
+    #[test]
+    fn schema_only_changes_do_not_mark_rows_modified() {
+        // A column present on one side only cannot be compared, so the row is
+        // unchanged as far as data_diff is concerned. Schema drift is
+        // schema_diff's job.
+        let source = df!("id" => [1i64], "amount" => [10i64]).unwrap();
+        let target = df!("id" => [1i64], "amount" => [10i64], "extra" => ["new"]).unwrap();
+        let result = run(source, target, &["id"], &plain());
+
+        assert!(result.modified.is_empty());
+        assert_eq!(
+            result.column_summary.column_presence.added_in_target,
+            vec!["extra".to_string()]
+        );
+    }
+
+    #[test]
+    fn only_columns_restricts_what_is_compared() {
+        // amount differs on id 2, name does not. Restricting to name hides it.
+        let result = run(
+            source_frame(),
+            target_frame(),
+            &["id"],
+            &options(None, Some("name"), None),
+        );
+        assert!(result.modified.is_empty());
+        assert_eq!(result.change_summary.len(), 1);
+        assert_eq!(result.change_summary[0].column, "name");
+    }
+
+    #[test]
+    fn exclude_columns_skips_the_named_column() {
+        let result = run(
+            source_frame(),
+            target_frame(),
+            &["id"],
+            &options(Some("amount"), None, None),
+        );
+        assert!(result.modified.is_empty());
+        assert!(result
+            .change_summary
+            .iter()
+            .all(|entry| entry.column != "amount"));
+    }
+
+    #[test]
+    fn exclude_and_only_together_is_rejected() {
+        let keys = vec!["id".to_string()];
+        let opts = options(Some("amount"), Some("name"), None);
+        let err = diff_dataframes(
+            source_frame(),
+            target_frame(),
+            "source",
+            "target",
+            &keys,
+            &opts,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Cannot use both"));
+    }
+
+    #[test]
+    fn tolerance_suppresses_small_changes_in_a_real_diff() {
+        // 200 -> 250 is a 20% change against the larger value.
+        let within = run(
+            source_frame(),
+            target_frame(),
+            &["id"],
+            &options(None, None, Some(Tolerance::Proportional(0.25))),
+        );
+        assert!(within.modified.is_empty());
+
+        let outside = run(
+            source_frame(),
+            target_frame(),
+            &["id"],
+            &options(None, None, Some(Tolerance::Proportional(0.1))),
+        );
+        assert_eq!(outside.modified, vec!["2".to_string()]);
+    }
+
+    #[test]
+    fn missing_key_column_is_rejected_on_either_side() {
+        let keys = vec!["nope".to_string()];
+        let err = diff_dataframes(
+            source_frame(),
+            target_frame(),
+            "source.csv",
+            "target.csv",
+            &keys,
+            &plain(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("source.csv"), "{err}");
+
+        let keys = vec!["name".to_string()];
+        let target_missing = df!("name_other" => ["Alice"]).unwrap();
+        let err = diff_dataframes(
+            source_frame(),
+            target_missing,
+            "source.csv",
+            "target.csv",
+            &keys,
+            &plain(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("target.csv"), "{err}");
+    }
+
+    #[test]
+    fn composite_keys_pair_rows_across_frames() {
+        let source = df!(
+            "id" => [1i64, 1],
+            "day" => ["mon", "tue"],
+            "amount" => [10i64, 20],
+        )
+        .unwrap();
+        let target = df!(
+            "id" => [1i64, 1],
+            "day" => ["mon", "tue"],
+            "amount" => [10i64, 99],
+        )
+        .unwrap();
+
+        let result = run(source, target, &["id", "day"], &plain());
+        assert!(result.source_only.is_empty());
+        assert!(result.target_only.is_empty());
+        assert_eq!(result.modified.len(), 1, "only the tue row changed");
+        assert!(result.modified[0].contains("tue"));
+    }
+
+    #[test]
+    fn key_lists_are_sorted_for_deterministic_output() {
+        let source = df!("id" => [5i64, 1, 3]).unwrap();
+        let target = df!("id" => [9i64, 7]).unwrap();
+        let result = run(source, target, &["id"], &plain());
+
+        let mut expected_source = result.source_only.clone();
+        expected_source.sort();
+        assert_eq!(result.source_only, expected_source);
+
+        let mut expected_target = result.target_only.clone();
+        expected_target.sort();
+        assert_eq!(result.target_only, expected_target);
+    }
+
+    // ---- DiffExport serialisation ----
+
+    #[test]
+    fn diff_export_json_keeps_its_shape() {
+        // Guards the exported field names and nesting. Anything consuming the
+        // --json output or a JSON export depends on this staying stable.
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        let value = serde_json::to_value(&result).unwrap();
+        let object = value.as_object().unwrap();
+
+        let mut top: Vec<&str> = object.keys().map(|k| k.as_str()).collect();
+        top.sort();
+        assert_eq!(
+            top,
+            vec![
+                "change_summary",
+                "column_summary",
+                "key_columns",
+                "modified",
+                "row_summary",
+                "source_only",
+                "target_only",
+            ]
+        );
+
+        let mut row: Vec<&str> = object["row_summary"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        row.sort();
+        assert_eq!(
+            row,
+            vec![
+                "modified_percent",
+                "modified_rows",
+                "source_only_percent",
+                "source_only_rows",
+                "source_rows",
+                "target_only_percent",
+                "target_only_rows",
+                "target_rows",
+            ]
+        );
+
+        let mut column: Vec<&str> = object["column_summary"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        column.sort();
+        assert_eq!(column, vec!["column_presence", "source", "target"]);
+
+        // Values, not just shape.
+        assert_eq!(object["key_columns"], serde_json::json!(["id"]));
+        assert_eq!(object["source_only"], serde_json::json!(["3"]));
+        assert_eq!(object["target_only"], serde_json::json!(["4"]));
+        assert_eq!(object["modified"], serde_json::json!(["2"]));
+        assert_eq!(object["row_summary"]["source_rows"], 3);
+        assert_eq!(object["row_summary"]["modified_rows"], 1);
+
+        let change: Vec<&str> = result
+            .change_summary
+            .iter()
+            .map(|entry| entry.column.as_str())
+            .collect();
+        assert_eq!(change, vec!["amount", "name"], "sorted comparable columns");
+    }
+
+    // ---- CSV export ----
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("biject_test_{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn csv_export_writes_one_file_per_section() {
+        let dir = scratch("csv_sections");
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        export_csv(dir.join("out").to_str().unwrap(), &result).unwrap();
+
+        for suffix in [
+            "source_only",
+            "target_only",
+            "modified",
+            "row_summary",
+            "column_summary_source",
+            "column_summary_target",
+            "column_presence",
+            "change_summary",
+        ] {
+            let path = dir.join(format!("out_{suffix}.csv"));
+            assert!(path.exists(), "missing {}", path.display());
+        }
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn csv_key_files_split_composite_keys_into_columns() {
+        let dir = scratch("csv_composite");
+        let source = df!(
+            "id" => [1i64, 2],
+            "day" => ["mon", "tue"],
+            "amount" => [10i64, 20],
+        )
+        .unwrap();
+        let target = df!(
+            "id" => [1i64],
+            "day" => ["mon"],
+            "amount" => [10i64],
+        )
+        .unwrap();
+
+        let result = run(source, target, &["id", "day"], &plain());
+        export_csv(dir.join("out").to_str().unwrap(), &result).unwrap();
+
+        let body = fs::read_to_string(dir.join("out_source_only.csv")).unwrap();
+        let mut lines = body.lines();
+        assert_eq!(lines.next().unwrap(), "id,day", "header names both keys");
+        // The composite key is split back into one column per key, not emitted
+        // as a single "2::tue" cell.
+        let row = lines.next().unwrap();
+        assert!(row.starts_with("2,"), "id first: {row}");
+        assert!(row.contains("tue"), "day second: {row}");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn csv_row_summary_is_a_metric_value_table() {
+        let dir = scratch("csv_row_summary");
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        export_csv(dir.join("out").to_str().unwrap(), &result).unwrap();
+
+        let body = fs::read_to_string(dir.join("out_row_summary.csv")).unwrap();
+        assert!(body.starts_with("metric,value\n"));
+        assert!(body.contains("source_rows,3"));
+        assert!(body.contains("target_rows,3"));
+        assert!(body.contains("modified_rows,1"));
+        assert!(body.contains("modified_percent,50.000"), "3dp: {body}");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn empty_key_list_is_rejected() {
         let df = frame(&[1], &["a"]);
