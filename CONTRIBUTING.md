@@ -21,8 +21,19 @@ sending a pull request. It is short, and it is required.
 cargo build
 cargo test
 cargo clippy --all-targets
-cargo fmt --check
 ```
+
+CI runs the tests and clippy on every push and pull request, and a failure
+blocks releases.
+
+Run `cargo fmt` over the code you touched. Do not reformat the whole tree —
+it is not uniformly formatted yet, so `cargo fmt --check` reports pre-existing
+differences that have nothing to do with your change, and a wholesale reformat
+would bury it in noise.
+
+Three clippy lints are currently allowed in CI (`too_many_arguments`,
+`needless_range_loop`, `match_ref_pats`) because they already fire across
+existing code. Everything else is denied, so new warnings will fail the build.
 
 The desktop app builds separately:
 

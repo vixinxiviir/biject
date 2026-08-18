@@ -2388,6 +2388,336 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
+    // ---- column statistics ----
+
+    #[test]
+    fn column_stats_cover_every_column_in_order() {
+        let df = df!("id" => [1i64, 2], "label" => ["a", "b"]).unwrap();
+        let stats = build_column_stats(&df).unwrap();
+        let names: Vec<&str> = stats.iter().map(|s| s.column.as_str()).collect();
+        assert_eq!(names, vec!["id", "label"]);
+    }
+
+    #[test]
+    fn numeric_columns_report_min_max_and_mean() {
+        let df = df!("amount" => [10i64, 20, 60]).unwrap();
+        let stats = build_column_stats(&df).unwrap();
+        let amount = &stats[0];
+
+        assert_eq!(amount.min, Some(10.0));
+        assert_eq!(amount.max, Some(60.0));
+        assert_eq!(amount.mean, Some(30.0));
+    }
+
+    #[test]
+    fn non_numeric_columns_leave_min_max_and_mean_unset() {
+        // The exporter emits null and the CLI prints "-" for these, so None is
+        // load-bearing rather than incidental.
+        let df = df!("label" => ["a", "b"]).unwrap();
+        let stats = build_column_stats(&df).unwrap();
+
+        assert_eq!(stats[0].min, None);
+        assert_eq!(stats[0].max, None);
+        assert_eq!(stats[0].mean, None);
+    }
+
+    #[test]
+    fn column_stats_count_nulls_and_distinct_values() {
+        let df = df!(
+            "amount" => [Some(1i64), None, Some(1), Some(4)],
+            "label" => [Some("x"), Some("x"), Some("y"), None],
+        )
+        .unwrap();
+        let stats = build_column_stats(&df).unwrap();
+        let by_name: HashMap<&str, &ColumnStats> =
+            stats.iter().map(|s| (s.column.as_str(), s)).collect();
+
+        assert_eq!(by_name["amount"].null_count, 1);
+        assert_eq!(by_name["label"].null_count, 1);
+        // n_unique counts null as a distinct value: {1, 4, null} and {x, y, null}.
+        assert_eq!(by_name["amount"].unique_count, 3);
+        assert_eq!(by_name["label"].unique_count, 3);
+    }
+
+    #[test]
+    fn null_aware_statistics_ignore_missing_values() {
+        // min/max/mean skip nulls rather than treating them as zero.
+        let df = df!("amount" => [Some(10i64), None, Some(30)]).unwrap();
+        let stats = build_column_stats(&df).unwrap();
+
+        assert_eq!(stats[0].min, Some(10.0));
+        assert_eq!(stats[0].max, Some(30.0));
+        assert_eq!(stats[0].mean, Some(20.0));
+    }
+
+    #[test]
+    fn an_all_null_numeric_column_has_no_statistics() {
+        let df = df!("amount" => [None::<i64>, None]).unwrap();
+        let stats = build_column_stats(&df).unwrap();
+
+        assert_eq!(stats[0].null_count, 2);
+        assert_eq!(stats[0].min, None);
+        assert_eq!(stats[0].max, None);
+        assert_eq!(stats[0].mean, None);
+    }
+
+    #[test]
+    fn column_stats_record_the_declared_data_type() {
+        let df = df!("amount" => [1i64], "label" => ["a"]).unwrap();
+        let stats = build_column_stats(&df).unwrap();
+        let by_name: HashMap<&str, &ColumnStats> =
+            stats.iter().map(|s| (s.column.as_str(), s)).collect();
+
+        assert_eq!(by_name["amount"].data_type, "Int64");
+        assert_eq!(by_name["label"].data_type, "String");
+    }
+
+    #[test]
+    fn column_stats_are_only_computed_when_requested() {
+        // diffs_only runs skip stats entirely; the export must still be valid.
+        let result = run(source_frame(), target_frame(), &["id"], &plain());
+        assert!(result.column_summary.source.is_empty());
+        assert!(result.column_summary.target.is_empty());
+
+        let with_stats = DiffComputationOptions {
+            exclude_columns: None,
+            only_columns: None,
+            numeric_tolerance: None,
+            include_column_stats: true,
+        };
+        let result = run(source_frame(), target_frame(), &["id"], &with_stats);
+        assert_eq!(result.column_summary.source.len(), 3);
+        assert_eq!(result.column_summary.target.len(), 3);
+    }
+
+    // ---- batch manifests ----
+
+    fn write(dir: &Path, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        fs::write(&path, body).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn json_manifest_round_trips_every_field() {
+        let dir = scratch("manifest_json");
+        let path = write(
+            &dir,
+            "pairs.json",
+            r#"[
+              {
+                "name": "first",
+                "source": "a.csv",
+                "target": "b.csv",
+                "key": "id,day",
+                "exclude_columns": "notes",
+                "numeric_tolerance": 0.5,
+                "diffs_only": true
+              }
+            ]"#,
+        );
+
+        let entries = read_batch_manifest(&path, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.name.as_deref(), Some("first"));
+        assert_eq!(entry.source, "a.csv");
+        assert_eq!(entry.target, "b.csv");
+        assert_eq!(entry.key.as_deref(), Some("id,day"));
+        assert_eq!(entry.exclude_columns.as_deref(), Some("notes"));
+        assert_eq!(entry.numeric_tolerance, Some(0.5));
+        assert_eq!(entry.numeric_tolerance_percent, None);
+        assert_eq!(entry.diffs_only, Some(true));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_manifest_accepts_a_percentage_tolerance() {
+        let dir = scratch("manifest_percent");
+        let path = write(
+            &dir,
+            "pairs.json",
+            r#"[{"source":"a.csv","target":"b.csv","numeric_tolerance_percent":5}]"#,
+        );
+
+        let entries = read_batch_manifest(&path, None).unwrap();
+        assert_eq!(entries[0].numeric_tolerance_percent, Some(5.0));
+        let resolved = Tolerance::resolve(
+            entries[0].numeric_tolerance,
+            entries[0].numeric_tolerance_percent,
+        )
+        .unwrap();
+        assert_eq!(resolved, Some(Tolerance::Proportional(0.05)));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_manifest_entry_needs_only_source_and_target() {
+        let dir = scratch("manifest_minimal");
+        let path = write(
+            &dir,
+            "pairs.json",
+            r#"[{"source":"a.csv","target":"b.csv"}]"#,
+        );
+
+        let entries = read_batch_manifest(&path, None).unwrap();
+        assert_eq!(entries[0].source, "a.csv");
+        assert!(entries[0].key.is_none(), "falls back to the global --key");
+        assert!(entries[0].diffs_only.is_none());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn json_manifest_tolerates_a_byte_order_mark_and_whitespace() {
+        // Manifests are hand-authored and frequently saved by editors that add
+        // a BOM; the parser strips it rather than failing on byte one.
+        let dir = scratch("manifest_bom");
+        let path = write(
+            &dir,
+            "pairs.json",
+            "\u{feff}\n  [{\"source\":\"a.csv\",\"target\":\"b.csv\"}]  \n",
+        );
+
+        let entries = read_batch_manifest(&path, None).unwrap();
+        assert_eq!(entries.len(), 1);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_manifest_missing_a_required_field_is_rejected() {
+        let dir = scratch("manifest_invalid");
+        let path = write(&dir, "pairs.json", r#"[{"source":"a.csv"}]"#);
+        assert!(read_batch_manifest(&path, None).is_err(), "target is required");
+
+        let path = write(&dir, "broken.json", "{not json");
+        assert!(read_batch_manifest(&path, None).is_err());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_missing_manifest_file_is_an_error_not_an_empty_batch() {
+        let dir = scratch("manifest_absent");
+        let path = dir.join("nope.json").to_str().unwrap().to_string();
+        assert!(read_batch_manifest(&path, None).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn csv_manifests_are_parsed_by_extension() {
+        let dir = scratch("manifest_csv");
+        let path = write(
+            &dir,
+            "pairs.csv",
+            "name,source,target,key,exclude_columns,numeric_tolerance,numeric_tolerance_percent,diffs_only\n\
+             first,a.csv,b.csv,id,notes,0.5,,true\n\
+             second,c.csv,d.csv,\"id,day\",,,5,false\n",
+        );
+
+        let entries = read_batch_manifest(&path, None).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name.as_deref(), Some("first"));
+        assert_eq!(entries[0].numeric_tolerance, Some(0.5));
+        assert_eq!(entries[0].diffs_only, Some(true));
+        // A quoted comma survives as a single multi-column key.
+        assert_eq!(entries[1].key.as_deref(), Some("id,day"));
+        assert_eq!(entries[1].numeric_tolerance_percent, Some(5.0));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn manifest_format_can_be_forced_against_the_extension() {
+        // A CSV manifest saved with a .txt extension would otherwise be parsed
+        // as JSON and fail.
+        let dir = scratch("manifest_forced");
+        let path = write(
+            &dir,
+            "pairs.txt",
+            "name,source,target\nfirst,a.csv,b.csv\n",
+        );
+
+        assert!(read_batch_manifest(&path, None).is_err(), "inferred as JSON");
+        let entries = read_batch_manifest(&path, Some(ManifestFormat::Csv)).unwrap();
+        assert_eq!(entries[0].source, "a.csv");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- pair naming and path safety ----
+
+    #[test]
+    fn a_pair_without_a_name_is_named_after_its_files() {
+        let entry = BatchManifestEntry {
+            name: None,
+            source: "data/customers_v1.csv".to_string(),
+            target: "data/customers_v2.csv".to_string(),
+            source_query: None,
+            target_query: None,
+            key: None,
+            output_base: None,
+            exclude_columns: None,
+            only_columns: None,
+            numeric_tolerance: None,
+            numeric_tolerance_percent: None,
+            diffs_only: None,
+        };
+        assert_eq!(batch_pair_name(&entry), "customers_v1_vs_customers_v2");
+    }
+
+    #[test]
+    fn a_blank_pair_name_falls_back_rather_than_producing_an_empty_label() {
+        let entry = BatchManifestEntry {
+            name: Some("   ".to_string()),
+            source: "a.csv".to_string(),
+            target: "b.csv".to_string(),
+            source_query: None,
+            target_query: None,
+            key: None,
+            output_base: None,
+            exclude_columns: None,
+            only_columns: None,
+            numeric_tolerance: None,
+            numeric_tolerance_percent: None,
+            diffs_only: None,
+        };
+        assert_eq!(batch_pair_name(&entry), "a_vs_b");
+    }
+
+    #[test]
+    fn pair_names_are_sanitised_before_becoming_filenames() {
+        // Pair names come from user-authored manifests and reach the filesystem
+        // as export filenames, so separators and traversal sequences must not
+        // survive. Leading and trailing underscores are trimmed, which is why
+        // a traversal prefix collapses away entirely rather than becoming "___".
+        assert_eq!(sanitize_file_component("a/b"), "a_b");
+        assert_eq!(sanitize_file_component("../etc/passwd"), "etc_passwd");
+        assert_eq!(sanitize_file_component("..\\windows\\system32"), "windows_system32");
+        assert_eq!(sanitize_file_component("with space"), "with_space");
+        assert_eq!(sanitize_file_component("keep-_09"), "keep-_09");
+    }
+
+    #[test]
+    fn sanitised_names_never_contain_path_syntax() {
+        for hostile in [
+            "../../etc/shadow",
+            "C:\\Windows\\Temp",
+            "name.with.dots",
+            "trailing/",
+            "*?<>|",
+        ] {
+            let safe = sanitize_file_component(hostile);
+            assert!(
+                !safe.contains(['/', '\\', '.', ':', '*', '?', '<', '>', '|']),
+                "{hostile:?} sanitised to {safe:?}"
+            );
+        }
+    }
+
     #[test]
     fn csv_row_summary_is_a_metric_value_table() {
         let dir = scratch("csv_row_summary");

@@ -35,6 +35,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Prefetch Rust dependencies
         run: |
@@ -46,6 +48,22 @@ jobs:
 
       - name: Check Tauri app crate
         run: cargo check --frozen --locked --manifest-path tauri-app/src-tauri/Cargo.toml
+
+      # Runs on every push, PR, and release tag. A failure here blocks the
+      # linux-artifacts job, so a release cannot be cut on a red test suite.
+      - name: Test CLI crate
+        run: cargo test --frozen --locked --all-targets
+
+      # Denies new lints while grandfathering three that already fire across the
+      # existing code. too_many_arguments in particular would mean reshaping
+      # public signatures, which is not worth doing for a lint.
+      - name: Lint
+        run: |
+          cargo clippy --frozen --locked --all-targets -- \
+            -D warnings \
+            -A clippy::too_many_arguments \
+            -A clippy::needless_range_loop \
+            -A clippy::match_ref_pats
 
       - name: Validate desktop entry
         run: |
