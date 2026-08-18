@@ -126,7 +126,8 @@ Options:
 - `--key` — one or more column names for row matching (can repeat: `--key id --key date`)
 - `--exclude-columns` — skip comparing certain columns (comma-separated: `--exclude-columns created_at,updated_at`)
 - `--only-columns` — compare only specific columns
-- `--numeric-tolerance` — allow numeric values to differ by this amount (e.g., `0.01` for 1%)
+- `--numeric-tolerance` — maximum **absolute** difference before two numbers count as changed (`0.01` ignores differences under one hundredth, not 1%)
+- `--numeric-tolerance-percent` — maximum difference as a **percentage** of the larger value (`5` ignores changes under 5%). Mutually exclusive with `--numeric-tolerance`
 - `--diffs-only` — show only modified rows, skip summary tables (much faster)
 - `--output` — directory to write exports; must be used together with `--format`
 - `--format` — export format: `json` or `csv`; must be used together with `--output`
@@ -190,7 +191,8 @@ Entries can override global settings:
 - `key` (string) — override `--key` for this pair
 - `exclude_columns` (string) — comma-separated columns to skip
 - `only_columns` (string) — comma-separated columns to include only
-- `numeric_tolerance` (float) — tolerance for this pair
+- `numeric_tolerance` (float) — absolute tolerance for this pair
+- `numeric_tolerance_percent` (float) — percentage tolerance for this pair; cannot be combined with `numeric_tolerance`
 - `diffs_only` (bool) — show only diffs for this pair
 - `output_base` (string) — per-pair output directory
 
@@ -344,6 +346,9 @@ Verify the input is a standard CSV with the expected delimiter, quotes, and enco
 
 **`--output` or `--format` is rejected**  
 Use them together. The CLI requires `--output` and `--format` as a pair, while `--temp` is an alternative output mode.
+
+**Error: "... has N duplicate values for key column ..."**  
+The key you chose is not unique in that file, so rows cannot be paired one-to-one. Add another `--key` column until the combination is unique, or de-duplicate the input. Bijection refuses to guess here rather than silently comparing only one of the matching rows.
 
 **Batch run fails on one pair but not others**  
 Run the failing pair directly with `biject data` using the same filters, or rerun the batch with `--fail-fast` to stop at the first failing entry.

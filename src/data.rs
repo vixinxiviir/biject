@@ -177,6 +177,7 @@ struct BatchManifestEntry {
     exclude_columns: Option<String>,
     only_columns: Option<String>,
     numeric_tolerance: Option<f64>,
+    numeric_tolerance_percent: Option<f64>,
     diffs_only: Option<bool>,
 }
 
@@ -192,6 +193,7 @@ struct BatchCsvManifestEntry {
     exclude_columns: Option<String>,
     only_columns: Option<String>,
     numeric_tolerance: Option<f64>,
+    numeric_tolerance_percent: Option<f64>,
     diffs_only: Option<bool>,
 }
 
@@ -243,7 +245,7 @@ struct BatchExport {
 struct DiffComputationOptions<'a> {
     exclude_columns: Option<&'a str>,
     only_columns: Option<&'a str>,
-    numeric_tolerance: Option<f64>,
+    numeric_tolerance: Option<Tolerance>,
     include_column_stats: bool,
 }
 
@@ -273,17 +275,53 @@ fn build_composite_key_column(df: &DataFrame, keys: &[String]) -> Result<Series>
      Ok(Series::new("__keys__", composite_keys))
 }
  
-/// Build a HashMap of composite keys to row indices
-fn build_composite_key_map(df: &DataFrame, keys: &[String]) -> Result<HashMap<String, usize>> {
+/// Build a HashMap of composite keys to row indices.
+///
+/// Errors if any key value occurs more than once. A keyed diff pairs rows
+/// one-to-one, so duplicate keys have no correct answer — silently keeping the
+/// last occurrence would drop rows from the comparison without saying so.
+fn build_composite_key_map(
+    df: &DataFrame,
+    keys: &[String],
+    label: &str,
+) -> Result<HashMap<String, usize>> {
     let mut map = HashMap::with_capacity(df.height());
+    let mut duplicates: Vec<String> = Vec::new();
     let key_series = build_composite_key_column(df, keys)?;
     if let Ok(key_str) = key_series.str() {
         for (idx, opt_key) in key_str.iter().enumerate() {
             if let Some(key_val) = opt_key {
-                map.insert(key_val.to_string(), idx);
+                if map.insert(key_val.to_string(), idx).is_some() {
+                    duplicates.push(key_val.to_string());
+                }
             }
         }
     }
+
+    if !duplicates.is_empty() {
+        duplicates.sort();
+        duplicates.dedup();
+        let sample: Vec<String> = duplicates.iter().take(5).cloned().collect();
+        let remainder = duplicates.len() - sample.len();
+        let suffix = if remainder > 0 {
+            format!(" and {} more", remainder)
+        } else {
+            String::new()
+        };
+        return Err(anyhow!(
+            "{} has {} duplicate value{} for key column{} [{}]: {}{}. \
+             Rows sharing a key cannot be paired one-to-one — add another key column \
+             to make the key unique, or de-duplicate the input.",
+            label,
+            duplicates.len(),
+            if duplicates.len() == 1 { "" } else { "s" },
+            if keys.len() == 1 { "" } else { "s" },
+            keys.join(", "),
+            sample.join(", "),
+            suffix
+        ));
+    }
+
     Ok(map)
 }
 
@@ -333,11 +371,83 @@ fn anyvalue_to_f64(value: &polars::prelude::AnyValue<'_>) -> Option<f64> {
 
 
 
+/// How far two numeric values may differ before they count as changed.
+///
+/// Both variants are inclusive: a difference exactly equal to the threshold
+/// still compares equal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Tolerance {
+    /// Equal when `|left - right| <= value`.
+    Absolute(f64),
+    /// Equal when `|left - right| / max(|left|, |right|) <= fraction`.
+    ///
+    /// Held as a fraction, so 5% is `Proportional(0.05)`.
+    Proportional(f64),
+}
+
+impl Tolerance {
+    /// Build a tolerance from the two mutually exclusive user-facing inputs.
+    ///
+    /// `percent` is given in percentage points (`5.0` meaning five percent) and
+    /// is stored as a fraction. Returns `Ok(None)` when neither is supplied.
+    pub fn resolve(
+        absolute: Option<f64>,
+        percent: Option<f64>,
+    ) -> Result<Option<Self>, DataDiffError> {
+        match (absolute, percent) {
+            (Some(_), Some(_)) => Err(DataDiffError::CLICommandError(
+                "Cannot use both an absolute and a proportional numeric tolerance".to_string(),
+            )),
+            (Some(value), None) => {
+                Self::check_non_negative(value, "numeric tolerance")?;
+                Ok(Some(Tolerance::Absolute(value)))
+            }
+            (None, Some(value)) => {
+                Self::check_non_negative(value, "numeric tolerance percent")?;
+                Ok(Some(Tolerance::Proportional(value / 100.0)))
+            }
+            (None, None) => Ok(None),
+        }
+    }
+
+    fn check_non_negative(value: f64, label: &str) -> Result<(), DataDiffError> {
+        if value.is_nan() || value < 0.0 {
+            return Err(DataDiffError::CLICommandError(format!(
+                "Invalid {}: {} — must be zero or greater",
+                label, value
+            )));
+        }
+        Ok(())
+    }
+
+    /// Whether two numbers are within this tolerance.
+    fn matches(self, left: f64, right: f64) -> bool {
+        let difference = (left - right).abs();
+        match self {
+            Tolerance::Absolute(value) => difference <= value,
+            Tolerance::Proportional(fraction) => {
+                // Scale by the larger magnitude so the comparison stays
+                // symmetric. Both values being exactly zero is the only way the
+                // scale is zero, and that is a match by definition.
+                let scale = left.abs().max(right.abs());
+                if scale == 0.0 {
+                    return true;
+                }
+                difference / scale <= fraction
+            }
+        }
+    }
+}
+
 /// Compare two values with optional numeric tolerance
-fn values_equal(left: &polars::prelude::AnyValue, right: &polars::prelude::AnyValue, tolerance: Option<f64>) -> bool {
+fn values_equal(
+    left: &polars::prelude::AnyValue,
+    right: &polars::prelude::AnyValue,
+    tolerance: Option<Tolerance>,
+) -> bool {
     if let Some(tol) = tolerance {
         if let (Some(left_num), Some(right_num)) = (anyvalue_to_f64(left), anyvalue_to_f64(right)) {
-            return (left_num - right_num).abs() <= tol;
+            return tol.matches(left_num, right_num);
         }
     }
 
@@ -355,7 +465,7 @@ pub fn data_diff(
     temp: bool,
     exclude_columns: Option<&str>,
     only_columns: Option<&str>,
-    numeric_tolerance: Option<f64>,
+    numeric_tolerance: Option<Tolerance>,
     diffs_only: bool,
     json_output: bool,
 ) -> Result<()> {
@@ -406,7 +516,7 @@ pub fn batch_diff(
     format: Option<ExportFormat>,
     exclude_columns: Option<&str>,
     only_columns: Option<&str>,
-    numeric_tolerance: Option<f64>,
+    numeric_tolerance: Option<Tolerance>,
     diffs_only: bool,
     fail_fast: bool,
 ) -> Result<()> {
@@ -445,7 +555,11 @@ pub fn batch_diff(
         let pair_options = DiffComputationOptions {
             exclude_columns: entry.exclude_columns.as_deref().or(exclude_columns),
             only_columns: entry.only_columns.as_deref().or(only_columns),
-            numeric_tolerance: entry.numeric_tolerance.or(numeric_tolerance),
+            numeric_tolerance: Tolerance::resolve(
+                entry.numeric_tolerance,
+                entry.numeric_tolerance_percent,
+            )?
+            .or(numeric_tolerance),
             include_column_stats: output.is_some() || format.is_some() || !pair_diffs_only,
         };
 
@@ -585,8 +699,8 @@ fn diff_dataframes(
     }
 
      // Build row index maps using composite keys (optimized with HashMap capacity pre-allocation)
-     let map1: HashMap<String, usize> = build_composite_key_map(&df1, keys)?;
-     let map2: HashMap<String, usize> = build_composite_key_map(&df2, keys)?;
+     let map1: HashMap<String, usize> = build_composite_key_map(&df1, keys, source_label)?;
+     let map2: HashMap<String, usize> = build_composite_key_map(&df2, keys, target_label)?;
  
      // Use iterators for efficient set operations without cloning all keys
      let keys1: HashSet<String> = map1.keys().cloned().collect();
@@ -821,6 +935,7 @@ fn read_batch_manifest_csv(path: &str) -> Result<Vec<BatchManifestEntry>> {
             exclude_columns: row.exclude_columns,
             only_columns: row.only_columns,
             numeric_tolerance: row.numeric_tolerance,
+            numeric_tolerance_percent: row.numeric_tolerance_percent,
             diffs_only: row.diffs_only,
         });
     }
@@ -1393,7 +1508,7 @@ pub fn run_diff(
     keys: &[String],
     exclude_columns: Option<&str>,
     only_columns: Option<&str>,
-    numeric_tolerance: Option<f64>,
+    numeric_tolerance: Option<Tolerance>,
 ) -> Result<serde_json::Value, DataDiffError> {
     let options = DiffComputationOptions {
         exclude_columns,
@@ -1415,7 +1530,7 @@ pub fn run_diff_frames(
     keys: &[String],
     exclude_columns: Option<&str>,
     only_columns: Option<&str>,
-    numeric_tolerance: Option<f64>,
+    numeric_tolerance: Option<Tolerance>,
 ) -> Result<serde_json::Value, DataDiffError> {
     let options = DiffComputationOptions {
         exclude_columns,
@@ -1527,7 +1642,7 @@ mod tests {
         assert!(values_equal(&AnyValue::Null, &AnyValue::Null, None));
         assert!(!values_equal(&AnyValue::Null, &AnyValue::Int64(0), None));
         // A null on either side is not numeric, so tolerance must not rescue it.
-        assert!(!values_equal(&AnyValue::Null, &AnyValue::Int64(0), Some(100.0)));
+        assert!(!values_equal(&AnyValue::Null, &AnyValue::Int64(0), Some(Tolerance::Absolute(100.0))));
     }
 
     // ---- values_equal: tolerance is an ABSOLUTE difference ----
@@ -1544,13 +1659,13 @@ mod tests {
         assert!(!values_equal(
             &AnyValue::Float64(50_000.0),
             &AnyValue::Float64(51_000.0),
-            Some(0.05)
+            Some(Tolerance::Absolute(0.05))
         ));
         // The same pair is equal once the tolerance genuinely covers the gap.
         assert!(values_equal(
             &AnyValue::Float64(50_000.0),
             &AnyValue::Float64(51_000.0),
-            Some(1_000.0)
+            Some(Tolerance::Absolute(1_000.0))
         ));
     }
 
@@ -1561,21 +1676,21 @@ mod tests {
         assert!(values_equal(
             &AnyValue::Float64(1.0),
             &AnyValue::Float64(1.5),
-            Some(0.5)
+            Some(Tolerance::Absolute(0.5))
         ));
         assert!(!values_equal(
             &AnyValue::Float64(1.0),
             &AnyValue::Float64(1.6),
-            Some(0.5)
+            Some(Tolerance::Absolute(0.5))
         ));
     }
 
     #[test]
     fn tolerance_is_symmetric_and_handles_negatives() {
-        assert!(values_equal(&AnyValue::Int64(10), &AnyValue::Int64(8), Some(2.0)));
-        assert!(values_equal(&AnyValue::Int64(8), &AnyValue::Int64(10), Some(2.0)));
-        assert!(values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-7), Some(2.0)));
-        assert!(!values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-8), Some(2.0)));
+        assert!(values_equal(&AnyValue::Int64(10), &AnyValue::Int64(8), Some(Tolerance::Absolute(2.0))));
+        assert!(values_equal(&AnyValue::Int64(8), &AnyValue::Int64(10), Some(Tolerance::Absolute(2.0))));
+        assert!(values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-7), Some(Tolerance::Absolute(2.0))));
+        assert!(!values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-8), Some(Tolerance::Absolute(2.0))));
     }
 
     #[test]
@@ -1586,7 +1701,7 @@ mod tests {
         assert!(values_equal(
             &AnyValue::Int64(5),
             &AnyValue::Float64(5.0),
-            Some(0.0)
+            Some(Tolerance::Absolute(0.0))
         ));
         assert!(!values_equal(&AnyValue::Int64(5), &AnyValue::Float64(5.0), None));
     }
@@ -1596,12 +1711,12 @@ mod tests {
         assert!(values_equal(
             &AnyValue::Int32(100),
             &AnyValue::Float64(100.4),
-            Some(0.5)
+            Some(Tolerance::Absolute(0.5))
         ));
         assert!(values_equal(
             &AnyValue::UInt8(7),
             &AnyValue::Int64(7),
-            Some(0.0)
+            Some(Tolerance::Absolute(0.0))
         ));
     }
 
@@ -1612,17 +1727,17 @@ mod tests {
         assert!(!values_equal(
             &AnyValue::String("100"),
             &AnyValue::String("101"),
-            Some(1_000.0)
+            Some(Tolerance::Absolute(1_000.0))
         ));
         assert!(values_equal(
             &AnyValue::String("same"),
             &AnyValue::String("same"),
-            Some(1_000.0)
+            Some(Tolerance::Absolute(1_000.0))
         ));
         assert!(!values_equal(
             &AnyValue::Boolean(true),
             &AnyValue::Boolean(false),
-            Some(1.0)
+            Some(Tolerance::Absolute(1.0))
         ));
     }
 
@@ -1632,8 +1747,8 @@ mod tests {
         // always reports a difference. Worth pinning: it means a column of NaNs
         // reports every row as modified rather than silently matching.
         let nan = AnyValue::Float64(f64::NAN);
-        assert!(!values_equal(&nan, &nan, Some(1.0)));
-        assert!(!values_equal(&nan, &AnyValue::Float64(1.0), Some(1_000.0)));
+        assert!(!values_equal(&nan, &nan, Some(Tolerance::Absolute(1.0))));
+        assert!(!values_equal(&nan, &AnyValue::Float64(1.0), Some(Tolerance::Absolute(1_000.0))));
     }
 
     // ---- column filtering ----
@@ -1700,7 +1815,7 @@ mod tests {
     #[test]
     fn single_key_maps_each_row_to_its_index() {
         let df = frame(&[1, 2, 3], &["a", "b", "c"]);
-        let map = build_composite_key_map(&df, &["id".to_string()]).unwrap();
+        let map = build_composite_key_map(&df, &["id".to_string()], "source").unwrap();
         assert_eq!(map.len(), 3);
         assert_eq!(map.values().copied().collect::<HashSet<_>>(), HashSet::from([0, 1, 2]));
     }
@@ -1709,28 +1824,160 @@ mod tests {
     fn composite_key_combines_all_key_columns() {
         let df = frame(&[1, 1], &["2024-01-01", "2024-01-02"]);
         let keys = vec!["id".to_string(), "date".to_string()];
-        let map = build_composite_key_map(&df, &keys).unwrap();
+        let map = build_composite_key_map(&df, &keys, "source").unwrap();
         // A duplicated id is still two distinct rows once the date participates.
         assert_eq!(map.len(), 2);
     }
 
     #[test]
-    fn duplicate_composite_keys_collapse_to_the_last_row() {
-        // Documents a real limitation: the key map is a HashMap, so rows sharing
-        // a composite key overwrite each other and only the last is ever
-        // compared. A source with duplicate keys is silently under-reported.
+    fn duplicate_composite_keys_are_rejected() {
+        // A keyed diff pairs rows one-to-one, so duplicates have no correct
+        // answer. Erroring is the only option that cannot silently drop rows.
         let df = frame(&[1, 1], &["2024-01-01", "2024-01-01"]);
         let keys = vec!["id".to_string(), "date".to_string()];
-        let map = build_composite_key_map(&df, &keys).unwrap();
+        let err = build_composite_key_map(&df, &keys, "source")
+            .expect_err("duplicate keys must not be accepted");
+        let message = err.to_string();
 
-        assert_eq!(df.height(), 2);
-        assert_eq!(map.len(), 1, "duplicate keys collapse");
-        assert_eq!(map.values().next().copied(), Some(1), "the later row wins");
+        assert!(message.contains("source"), "names the offending side: {message}");
+        assert!(message.contains("duplicate"), "says what is wrong: {message}");
+        assert!(message.contains("id, date"), "names the key columns: {message}");
+    }
+
+    #[test]
+    fn duplicate_key_error_distinguishes_source_from_target() {
+        let df = frame(&[7, 7], &["a", "a"]);
+        let keys = vec!["id".to_string(), "date".to_string()];
+        let err = build_composite_key_map(&df, &keys, "target.csv").unwrap_err();
+        assert!(err.to_string().contains("target.csv"));
+    }
+
+    #[test]
+    fn unique_keys_are_still_accepted() {
+        let df = frame(&[1, 2], &["a", "a"]);
+        let keys = vec!["id".to_string(), "date".to_string()];
+        assert_eq!(build_composite_key_map(&df, &keys, "source").unwrap().len(), 2);
+    }
+
+    // ---- proportional tolerance ----
+
+    #[test]
+    fn proportional_tolerance_scales_with_magnitude() {
+        // 1,000 apart on 51,000 is under 2%. This is the case absolute
+        // tolerance cannot express without knowing the magnitude up front.
+        let two_percent = Some(Tolerance::Proportional(0.02));
+        assert!(values_equal(
+            &AnyValue::Float64(50_000.0),
+            &AnyValue::Float64(51_000.0),
+            two_percent
+        ));
+
+        let one_percent = Some(Tolerance::Proportional(0.01));
+        assert!(!values_equal(
+            &AnyValue::Float64(50_000.0),
+            &AnyValue::Float64(51_000.0),
+            one_percent
+        ));
+
+        // The same proportion applied to small numbers stays proportional.
+        assert!(values_equal(
+            &AnyValue::Float64(5.0),
+            &AnyValue::Float64(5.1),
+            two_percent
+        ));
+    }
+
+    #[test]
+    fn proportional_tolerance_is_symmetric() {
+        let tol = Some(Tolerance::Proportional(0.1));
+        assert_eq!(
+            values_equal(&AnyValue::Float64(100.0), &AnyValue::Float64(105.0), tol),
+            values_equal(&AnyValue::Float64(105.0), &AnyValue::Float64(100.0), tol),
+        );
+    }
+
+    #[test]
+    fn proportional_tolerance_treats_zero_sensibly() {
+        let tol = Some(Tolerance::Proportional(0.5));
+        // Both exactly zero is a match; scaling by the larger magnitude would
+        // otherwise divide by zero.
+        assert!(values_equal(&AnyValue::Float64(0.0), &AnyValue::Float64(0.0), tol));
+        // Zero against anything else is a 100% difference.
+        assert!(!values_equal(&AnyValue::Float64(0.0), &AnyValue::Float64(5.0), tol));
+        assert!(values_equal(
+            &AnyValue::Float64(0.0),
+            &AnyValue::Float64(5.0),
+            Some(Tolerance::Proportional(1.0))
+        ));
+    }
+
+    #[test]
+    fn proportional_boundary_is_inclusive() {
+        // Exactly 10% of the larger value.
+        assert!(values_equal(
+            &AnyValue::Float64(90.0),
+            &AnyValue::Float64(100.0),
+            Some(Tolerance::Proportional(0.1))
+        ));
+        assert!(!values_equal(
+            &AnyValue::Float64(89.0),
+            &AnyValue::Float64(100.0),
+            Some(Tolerance::Proportional(0.1))
+        ));
+    }
+
+    #[test]
+    fn proportional_tolerance_rejects_nan() {
+        let nan = AnyValue::Float64(f64::NAN);
+        assert!(!values_equal(&nan, &nan, Some(Tolerance::Proportional(1.0))));
+        assert!(!values_equal(
+            &nan,
+            &AnyValue::Float64(1.0),
+            Some(Tolerance::Proportional(1.0))
+        ));
+    }
+
+    // ---- Tolerance::resolve ----
+
+    #[test]
+    fn resolve_returns_none_when_neither_is_given() {
+        assert_eq!(Tolerance::resolve(None, None).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_converts_percent_to_a_fraction() {
+        match Tolerance::resolve(None, Some(5.0)).unwrap() {
+            Some(Tolerance::Proportional(fraction)) => {
+                assert!((fraction - 0.05).abs() < f64::EPSILON, "got {fraction}");
+            }
+            other => panic!("expected a proportional tolerance, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_passes_absolute_through_unchanged() {
+        assert_eq!(
+            Tolerance::resolve(Some(0.01), None).unwrap(),
+            Some(Tolerance::Absolute(0.01))
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_both_at_once() {
+        assert!(Tolerance::resolve(Some(0.01), Some(5.0)).is_err());
+    }
+
+    #[test]
+    fn resolve_rejects_negative_and_nan_input() {
+        assert!(Tolerance::resolve(Some(-1.0), None).is_err());
+        assert!(Tolerance::resolve(None, Some(-5.0)).is_err());
+        assert!(Tolerance::resolve(Some(f64::NAN), None).is_err());
+        assert!(Tolerance::resolve(None, Some(f64::NAN)).is_err());
     }
 
     #[test]
     fn empty_key_list_is_rejected() {
         let df = frame(&[1], &["a"]);
-        assert!(build_composite_key_map(&df, &[]).is_err());
+        assert!(build_composite_key_map(&df, &[], "source").is_err());
     }
 }

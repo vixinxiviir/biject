@@ -42,14 +42,17 @@ fn run_diff(
     exclude_columns: Option<String>,
     only_columns: Option<String>,
     numeric_tolerance: Option<f64>,
+    numeric_tolerance_percent: Option<f64>,
 ) -> Result<serde_json::Value, String> {
+    let tolerance = biject::data::Tolerance::resolve(numeric_tolerance, numeric_tolerance_percent)
+        .map_err(|e| e.to_string())?;
     biject::data::run_diff(
         &path1,
         &path2,
         &keys,
         exclude_columns.as_deref(),
         only_columns.as_deref(),
-        numeric_tolerance,
+        tolerance,
     )
     .map_err(|e| e.to_string())
 }
@@ -79,7 +82,10 @@ async fn run_source_diff(
     exclude_columns: Option<String>,
     only_columns: Option<String>,
     numeric_tolerance: Option<f64>,
+    numeric_tolerance_percent: Option<f64>,
 ) -> Result<serde_json::Value, String> {
+    let tolerance = biject::data::Tolerance::resolve(numeric_tolerance, numeric_tolerance_percent)
+        .map_err(|e| e.to_string())?;
     let label1 = source1.label();
     let label2 = source2.label();
     let df1 = biject::connectors::load_source(&source1)
@@ -96,7 +102,7 @@ async fn run_source_diff(
         &keys,
         exclude_columns.as_deref(),
         only_columns.as_deref(),
-        numeric_tolerance,
+        tolerance,
     )
     .map_err(|e| e.to_string())
 }

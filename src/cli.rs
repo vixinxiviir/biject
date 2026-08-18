@@ -70,6 +70,13 @@ pub enum Commands {
         #[arg(long, help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)")]
         numeric_tolerance: Option<f64>,
 
+        #[arg(
+            long,
+            conflicts_with = "numeric_tolerance",
+            help = "Maximum difference as a percentage of the larger value (e.g. 5 ignores changes under 5%)"
+        )]
+        numeric_tolerance_percent: Option<f64>,
+
         #[arg(long, help = "Show only modified rows, skip summary tables")]
         diffs_only: bool,
 
@@ -100,6 +107,13 @@ pub enum Commands {
 
         #[arg(long, help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)")]
         numeric_tolerance: Option<f64>,
+
+        #[arg(
+            long,
+            conflicts_with = "numeric_tolerance",
+            help = "Maximum difference as a percentage of the larger value (e.g. 5 ignores changes under 5%)"
+        )]
+        numeric_tolerance_percent: Option<f64>,
 
         #[arg(long, help = "Show only per-pair diff counts, skip verbose summaries")]
         diffs_only: bool,
@@ -133,10 +147,12 @@ pub fn dispatch(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
             exclude_columns,
             only_columns,
             numeric_tolerance,
+            numeric_tolerance_percent,
             diffs_only,
             json,
         } => {
             data::validate_export_args(output.as_deref(), format.as_ref(), temp)?;
+            let tolerance = data::Tolerance::resolve(numeric_tolerance, numeric_tolerance_percent)?;
             data::data_diff(
                 &source,
                 &target,
@@ -148,7 +164,7 @@ pub fn dispatch(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
                 temp,
                 exclude_columns.as_deref(),
                 only_columns.as_deref(),
-                numeric_tolerance,
+                tolerance,
                 diffs_only,
                 json,
             )?;
@@ -162,10 +178,12 @@ pub fn dispatch(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
             exclude_columns,
             only_columns,
             numeric_tolerance,
+            numeric_tolerance_percent,
             diffs_only,
             fail_fast,
         } => {
             data::validate_export_args(output.as_deref(), format.as_ref(), false)?;
+            let tolerance = data::Tolerance::resolve(numeric_tolerance, numeric_tolerance_percent)?;
             data::batch_diff(
                 &manifest,
                 manifest_format,
@@ -174,7 +192,7 @@ pub fn dispatch(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
                 format,
                 exclude_columns.as_deref(),
                 only_columns.as_deref(),
-                numeric_tolerance,
+                tolerance,
                 diffs_only,
                 fail_fast,
             )?;
