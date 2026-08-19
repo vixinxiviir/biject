@@ -1,7 +1,7 @@
 # Dependency license audit
 
-**Audit date:** 2026-08-14
-**Audited version:** biject 0.3.0
+**Audit date:** 2026-08-19
+**Audited version:** biject 0.4.0
 **Tool:** `cargo license --avoid-build-deps --avoid-dev-deps`
 
 > This document is an engineering record, not legal advice. The conclusions below
@@ -145,6 +145,16 @@ descriptions):
 ```bash
 awk -F'\t' '$5 ~ /GPL|MPL|EUPL|CDDL|SSPL|BUSL|OSL-|CPAL/ {print $1"\t"$2"\t"$5}' core-licenses.tsv
 ```
+
+## Change log
+
+**2026-08-19, 0.4.0.** Re-run after the database connectors were changed to
+produce typed columns. That added three Cargo features — `polars/timezones`,
+`rusqlite/column_decltype`, and a direct `rust_decimal` dependency with
+`db-tokio-postgres` — but introduced **no new crates**: `chrono-tz` and
+`rust_decimal` were already in the tree transitively. The census is unchanged
+at 432 crates with the same three MPL-2.0 dependencies, so the verdict above
+still holds.
 
 ## Re-audit triggers
 

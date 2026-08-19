@@ -38,7 +38,7 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-polars = { version = "0.39", features = ["lazy", "csv", "parquet", "streaming"] }
+polars = { version = "0.39", features = ["lazy", "csv", "parquet", "streaming", "timezones"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1"
@@ -50,12 +50,18 @@ tiberius = { version = "0.12", features = ["tds73"] }
 tokio = { version = "1", features = ["rt", "net", "rt-multi-thread"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+# NUMERIC has no native Rust mapping in tokio-postgres, so without this the
+# column decodes as null and every decimal value silently vanishes from the
+# diff. Already in the tree via mysql_async; this only adds the FromSql impl.
+rust_decimal = { version = "1", features = ["db-tokio-postgres"] }
 mysql_async = "0.34"
 keyring = "3"
 dirs = "5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rusqlite = "0.31"
+# column_decltype exposes each result column's declared type, which is how the
+# SQLite connector recovers a column's intended type for typing and schema diffs.
+rusqlite = { version = "0.31", features = ["column_decltype"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "column_decltype"] }
