@@ -156,6 +156,12 @@ produce typed columns. That added three Cargo features — `polars/timezones`,
 at 432 crates with the same three MPL-2.0 dependencies, so the verdict above
 still holds.
 
+**2026-08-19, MySQL and SQL Server connectors.** Re-run after those two
+connectors were given real column types. Added `polars` features `dtype-i8`,
+`dtype-i16`, `dtype-u8` and `dtype-u16`, which gate the narrow integer types
+needed to keep TINYINT and SMALLINT distinct from INT. No new crates; the
+census is unchanged at 432 with the same three MPL-2.0 dependencies.
+
 ## Re-audit triggers
 
 Re-run before any release that adds or bumps dependencies, and specifically:

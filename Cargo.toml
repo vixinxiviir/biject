@@ -38,7 +38,7 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-polars = { version = "0.39", features = ["lazy", "csv", "parquet", "streaming", "timezones"] }
+polars = { version = "0.39", features = ["lazy", "csv", "parquet", "streaming", "timezones", "dtype-i8", "dtype-i16", "dtype-u8", "dtype-u16"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1"
