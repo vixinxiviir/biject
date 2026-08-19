@@ -17,6 +17,10 @@ exclude = [
     ".github/",
     # Internal planning notes — must never be published
     "*-roadmap.md",
+    # Generated attribution for bundled dependencies. Belongs with binaries,
+    # not with source: a published snapshot goes stale as soon as a dependency
+    # changes, and CI regenerates it for every release.
+    "THIRD-PARTY-NOTICES.txt",
     # Local scratch, run output, and editor/tooling state
     "outputs-*/",
     "myresults",

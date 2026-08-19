@@ -126,8 +126,12 @@ cargo about init
 cargo about generate about.hbs > THIRD-PARTY-NOTICES.txt
 ```
 
-This is not yet wired into the release workflow. It should be before the first
-paid release.
+Done as of 0.4.0. `about.toml` and `about.hbs` live in the repository root, the
+release workflow regenerates `THIRD-PARTY-NOTICES.txt` on every tagged build
+rather than trusting the committed copy, and the file ships in the GitHub
+release and the AUR package. Generation **fails the release** if a dependency
+carries a licence not listed in `about.toml`, so a new dependency cannot ship
+without a decision being recorded.
 
 ## Reproducing this audit
 

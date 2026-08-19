@@ -1,0 +1,23 @@
+THIRD-PARTY NOTICES
+
+Bijection incorporates the open source components listed below. Each is
+distributed under its own licence, reproduced here in full as those licences
+require.
+
+Bijection itself is licensed separately. See the LICENSE file for its terms and
+LICENSING.md for how the free and commercial offerings relate.
+
+This file is generated. Do not edit it by hand; run `cargo about generate` after
+changing dependencies. See docs/licensing.md.
+
+{{#each licenses}}
+================================================================================
+{{{name}}}
+
+Used by:
+{{#each used_by}}  - {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}}  ({{{crate.repository}}}){{/if}}
+{{/each}}
+--------------------------------------------------------------------------------
+{{{text}}}
+
+{{/each}}

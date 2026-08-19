@@ -1,5 +1,5 @@
 pkgname=biject
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="Schema-aware data diff tool with a Rust CLI and Tauri desktop UI"
 arch=('x86_64')
@@ -73,4 +73,7 @@ package() {
   install -Dm644 tauri-app/src-tauri/icons/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/biject.png"
 
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  # Attribution for bundled dependencies; required by the permissive licences
+  # most of them use. Shipped in the release tarball.
+  install -Dm644 THIRD-PARTY-NOTICES.txt     "${pkgdir}/usr/share/licenses/${pkgname}/THIRD-PARTY-NOTICES.txt"
 }

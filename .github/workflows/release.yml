@@ -108,6 +108,14 @@ jobs:
           mkdir -p dist
           tar --zstd -cf "dist/biject-vendor-${VERSION}.tar.zst" vendor
 
+      # Regenerated rather than trusting the committed copy, so a dependency
+      # added without re-running cargo-about cannot ship stale attribution.
+      # Fails the release if any dependency licence is not in about.toml.
+      - name: Generate third-party notices
+        run: |
+          cargo install cargo-about --features cli --locked
+          cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
+
       - name: Build CLI binary
         run: cargo build --frozen --release --locked --bin biject
 
@@ -124,6 +132,7 @@ jobs:
           cp packaging/aur/PKGBUILD dist/
           cp packaging/aur/.SRCINFO dist/
           cp LICENSE dist/
+          cp THIRD-PARTY-NOTICES.txt dist/
           curl -L -o "dist/biject-${VERSION}.tar.gz" "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
           (
             cd dist
