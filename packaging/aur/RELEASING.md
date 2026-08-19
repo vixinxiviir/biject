@@ -86,6 +86,27 @@ already exist and be complete.
    | `tauri-app/src-tauri/tauri.conf.json` | `version` |
    | `packaging/aur/PKGBUILD` | `pkgver` |
 
+   **Then regenerate both lockfiles and commit them.** The Tauri app depends on
+   the CLI crate by path, so bumping the CLI version leaves
+   `tauri-app/src-tauri/Cargo.lock` recording the old one. CI checks each crate
+   with `--locked`, which forbids updating a stale lockfile rather than fixing
+   it, so the job fails with "cannot update the lock file". This has broken CI
+   twice — once on a dependency bump, once on a version bump.
+
+   ```bash
+   cargo metadata --format-version 1 > /dev/null
+   ```
+
+   ```bash
+   cargo metadata --manifest-path tauri-app/src-tauri/Cargo.toml --format-version 1 > /dev/null
+   ```
+
+   Confirm both agree before pushing:
+
+   ```bash
+   grep -A1 '^name = "biject"$' Cargo.lock tauri-app/src-tauri/Cargo.lock
+   ```
+
 2. **Run `cargo update` if a dependency is holding back the build**, and verify
    against the toolchain CI uses, not just your local default. These diverge and
    that divergence has broken a release before:
