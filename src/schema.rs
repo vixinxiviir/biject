@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-enum TypeChangeImpact {
+pub enum TypeChangeImpact {
     SafePromotion,
     RiskyConversion,
     Breaking,
@@ -61,24 +61,24 @@ impl From<anyhow::Error> for SchemaDiffError {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TypeChange {
-    column: String,
-    source_type: String,
-    target_type: String,
-    impact: TypeChangeImpact,
+    pub column: String,
+    pub source_type: String,
+    pub target_type: String,
+    pub impact: TypeChangeImpact,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RenameSuggestion {
-    source_column: String,
-    target_column: String,
-    score: f64,
+    pub source_column: String,
+    pub target_column: String,
+    pub score: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CompatibilitySummary {
-    backward_compatible: bool,
-    forward_compatible: bool,
-    breaking_reasons: Vec<String>,
+    pub backward_compatible: bool,
+    pub forward_compatible: bool,
+    pub breaking_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
