@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use crate::connectors;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -82,9 +82,15 @@ pub struct CompatibilitySummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct SchemaDiffResult {
     pub source_path: String,
     pub target_path: String,
+    /// Every source column mapped to its type, so consumers that need to act on
+    /// `added` or `removed` can look up the type rather than reloading the data.
+    pub source_schema: BTreeMap<String, String>,
+    /// Every target column mapped to its type.
+    pub target_schema: BTreeMap<String, String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
     pub type_changes: Vec<TypeChange>,
@@ -172,6 +178,8 @@ fn run_schema_diff_inner(df1: &DataFrame, df2: &DataFrame, source_label: &str, t
     Ok(SchemaDiffResult {
         source_path: source_label.to_string(),
         target_path: target_label.to_string(),
+        source_schema: source_schema.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        target_schema: target_schema.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         added,
         removed,
         type_changes,
