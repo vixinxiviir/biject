@@ -11,6 +11,8 @@ use crate::schema;
 
 #[derive(Parser)]
 #[command(name = "biject")]
+// README documents `biject --version`, and users expect it regardless.
+#[command(version)]
 #[command(about = "A CLI tool for diffing data and schemas")]
 #[command(arg_required_else_help = true)]
 pub struct Cli {
