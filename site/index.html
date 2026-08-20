@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bijection — schema and data diffs for SQL databases</title>
+<meta name="description" content="Compare schemas and rows across PostgreSQL, MySQL, SQL Server, SQLite and CSV. Free and open source. Migration DDL generation available commercially.">
+
+<meta property="og:title" content="Bijection">
+<meta property="og:description" content="Schema and data diffs for SQL databases. The maintained successor to open-source data-diff.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://bijection.dev">
+
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f6f7f9;
+    --bg-code: #1b1f24;
+    --fg: #16191d;
+    --fg-muted: #5b636d;
+    --border: #e2e5e9;
+    --accent: #1f6feb;
+    --accent-fg: #ffffff;
+    --code-fg: #e6edf3;
+    --code-muted: #8b949e;
+    --code-add: #7ee787;
+    --code-warn: #f0b849;
+    --code-del: #ff7b72;
+    --radius: 8px;
+    --measure: 68ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1214;
+      --bg-soft: #171b1f;
+      --bg-code: #171b1f;
+      --fg: #e8eaed;
+      --fg-muted: #9aa4af;
+      --border: #262c33;
+      --accent: #4d9bff;
+      --accent-fg: #08111f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1214;
+    --bg-soft: #171b1f;
+    --bg-code: #171b1f;
+    --fg: #e8eaed;
+    --fg-muted: #9aa4af;
+    --border: #262c33;
+    --accent: #4d9bff;
+    --accent-fg: #08111f;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 20px; }
+  a { color: var(--accent); }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+
+  header { padding: 72px 0 8px; }
+  .brand { font-size: 15px; letter-spacing: .14em; text-transform: uppercase; color: var(--fg-muted); margin: 0 0 20px; }
+  h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.15; letter-spacing: -.02em; margin: 0 0 18px; max-width: 20ch; }
+  .lede { font-size: clamp(17px, 2.2vw, 20px); color: var(--fg-muted); max-width: var(--measure); margin: 0 0 12px; }
+  .successor { max-width: var(--measure); color: var(--fg-muted); margin: 0 0 28px; }
+
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .btn {
+    display: inline-block; padding: 11px 20px; border-radius: var(--radius);
+    text-decoration: none; font-weight: 600; font-size: 15px; border: 1px solid transparent;
+  }
+  .btn-primary { background: var(--accent); color: var(--accent-fg); }
+  .btn-secondary { background: transparent; color: var(--fg); border-color: var(--border); }
+  .cta-note { color: var(--fg-muted); font-size: 14px; }
+
+  section { padding: 44px 0; border-top: 1px solid var(--border); }
+  section:first-of-type { border-top: 0; }
+  h2 { font-size: 22px; letter-spacing: -.01em; margin: 0 0 14px; }
+  h3 { font-size: 16px; margin: 26px 0 8px; }
+  p { max-width: var(--measure); }
+  .muted { color: var(--fg-muted); }
+
+  pre {
+    background: var(--bg-code); color: var(--code-fg);
+    padding: 18px 20px; border-radius: var(--radius);
+    overflow-x: auto; font-size: 13.5px; line-height: 1.6; margin: 0 0 16px;
+    border: 1px solid var(--border);
+  }
+  pre .c { color: var(--code-muted); }
+  pre .a { color: var(--code-add); }
+  pre .w { color: var(--code-warn); }
+  pre .d { color: var(--code-del); }
+  pre .p { color: var(--accent); }
+
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .card { border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; background: var(--bg-soft); }
+  .card h3 { margin-top: 0; }
+  .card p { font-size: 14.5px; color: var(--fg-muted); margin: 0; }
+
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 460px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-muted); font-weight: 600; }
+  td.yes { color: var(--fg); }
+  td.no { color: var(--fg-muted); }
+
+  .price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin: 4px 0 14px; }
+  .price .amount { font-size: 40px; font-weight: 700; letter-spacing: -.02em; }
+  .price .terms { color: var(--fg-muted); font-size: 15px; }
+
+  .honest { background: var(--bg-soft); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
+  .honest h3 { margin-top: 0; }
+  .honest ul { margin: 0; padding-left: 20px; color: var(--fg-muted); }
+  .honest li { margin-bottom: 6px; max-width: var(--measure); }
+
+  footer { border-top: 1px solid var(--border); padding: 30px 0 60px; color: var(--fg-muted); font-size: 14px; }
+  footer a { color: var(--fg-muted); }
+  .foot-links { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <p class="brand">Bijection</p>
+  <h1>See exactly what changed between two databases.</h1>
+  <p class="lede">
+    Compare schemas and rows across PostgreSQL, MySQL, SQL Server, SQLite and CSV.
+    Find the columns that moved, the types that drifted, and the rows that differ —
+    with tolerances that understand floating point.
+  </p>
+  <p class="successor">
+    The maintained successor to open-source <span class="mono">data-diff</span>, archived in 2024.
+    Free and open source under the GPL.
+  </p>
+  <div class="cta-row">
+    <a class="btn btn-primary" href="#install">Install</a>
+    <a class="btn btn-secondary" href="https://github.com/vixinxiviir/biject">Source on GitHub</a>
+  </div>
+</header>
+
+<section>
+  <h2>A schema diff, in full</h2>
+  <p class="muted">Real output. Two CSVs here, but a <span class="mono">postgres://</span> URI works the same way.</p>
+<pre><span class="p">$</span> biject schema --source dev.csv --target prod.csv
+
+Schema Comparison Results
+---------------------------
+Columns added in target (2): [<span class="a">"churned"</span>, <span class="a">"email_address"</span>]
+Columns removed from source (1): [<span class="d">"email"</span>]
+No type changes across shared columns.
+Potential renames:
+  - <span class="w">email -&gt; email_address (confidence 0.70)</span>
+Compatibility:
+  - Backward compatible: false
+  - Forward compatible: false
+  - Breaking reasons:
+    - Removed column: email</pre>
+  <p class="muted">
+    Note the rename. <span class="mono">email</span> did not disappear and
+    <span class="mono">email_address</span> was not invented — the column moved, and
+    Bijection says so with a confidence score instead of reporting a drop and an add.
+  </p>
+</section>
+
+<section>
+  <h2>What it does</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Schema comparison</h3>
+      <p>Added, removed and retyped columns, classified by whether the change is a safe promotion, a risky conversion, or outright breaking.</p>
+    </div>
+    <div class="card">
+      <h3>Keyed row diffs</h3>
+      <p>Composite keys, column filters, and numeric tolerance — absolute or proportional — so a rounding difference is not reported as a change.</p>
+    </div>
+    <div class="card">
+      <h3>Rename detection</h3>
+      <p>Token similarity finds columns that moved rather than reporting each as an unrelated drop and add.</p>
+    </div>
+    <div class="card">
+      <h3>Batch runs</h3>
+      <p>A manifest of source and target pairs, aggregated summaries, JSON and CSV export, and exit codes that work in CI.</p>
+    </div>
+    <div class="card">
+      <h3>Schema contracts</h3>
+      <p>Assert a policy in JSON and fail the build when a migration would break compatibility.</p>
+    </div>
+    <div class="card">
+      <h3>Desktop app</h3>
+      <p>The same engine behind a GUI, with saved connection profiles kept in your OS keychain.</p>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <h2>Install</h2>
+  <h3>From crates.io</h3>
+<pre><span class="p">$</span> cargo install biject</pre>
+  <h3>Arch Linux</h3>
+<pre><span class="p">$</span> yay -S biject</pre>
+  <h3>Prebuilt binaries</h3>
+  <p class="muted">
+    Linux binaries for the CLI and desktop app are attached to every
+    <a href="https://github.com/vixinxiviir/biject/releases">GitHub release</a>.
+  </p>
+</section>
+
+<section>
+  <h2>Free and paid</h2>
+  <p class="muted">
+    Everything below the line is free software and stays that way. Paid functionality is
+    only ever additional — nothing that is free today will be taken away.
+  </p>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Capability</th><th>Free</th><th>Commercial</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Schema comparison and impact classification</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+      <tr><td>Keyed row diffs, tolerance, filters</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+      <tr><td>Batch manifests and schema policies</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+      <tr><td>PostgreSQL, MySQL, SQL Server, SQLite, CSV</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+      <tr><td>Desktop application</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+      <tr><td><span class="mono">migrate</span> — generates the DDL to fix the difference</td><td class="no">—</td><td class="yes">Yes</td></tr>
+      <tr><td>A rollback script for every migration</td><td class="no">—</td><td class="yes">Yes</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>Generate the migration, and its rollback</h2>
+  <p class="muted">
+    Free tells you what differs. <span class="mono">migrate</span> writes the PostgreSQL
+    DDL that closes the gap — and a rollback derived from the same plan, so the two cannot drift apart.
+  </p>
+<pre><span class="p">$</span> biject migrate --source dev --target prod \
+      --table accounts --out up.sql --rollback down.sql
+
+<span class="c">-- Inferred rename, confidence 0.70. If these are unrelated
+-- columns, replace this with a DROP and an ADD.</span>
+ALTER TABLE "accounts" RENAME COLUMN "email_address" TO "email";
+
+ALTER TABLE "accounts" ADD COLUMN "created" TEXT;
+
+<span class="c">-- Was DOUBLE PRECISION. Verify the cast succeeds on real data.</span>
+ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;</pre>
+  <p class="muted">
+    Destructive statements are withheld unless you ask for them with
+    <span class="mono">--allow-destructive</span>, and are reported either way.
+    <strong>Bijection never executes SQL.</strong> It writes a file for you to read.
+  </p>
+</section>
+
+<section>
+  <h2>Buy</h2>
+  <div class="price">
+    <span class="amount">$39</span>
+    <span class="terms">once — perpetual for the version you buy</span>
+  </div>
+  <p class="muted">
+    No subscription, no account, no telemetry. Your licence is a file that verifies
+    offline, so it works on an air-gapped build server. It covers every patch release
+    of the version you bought, forever.
+  </p>
+  <div class="cta-row">
+    <!-- REPLACE with the merchant-of-record checkout URL before launch. -->
+    <a class="btn btn-primary" href="#" data-checkout-placeholder>Buy a licence — $39</a>
+    <span class="cta-note">30-day refund, no questions asked.</span>
+  </div>
+  <p class="muted" style="font-size:14.5px">
+    Questions before buying: <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>.
+  </p>
+</section>
+
+<section>
+  <h2>What it is not</h2>
+  <div class="honest">
+    <h3>Worth knowing before you install</h3>
+    <ul>
+      <li><strong>Not built for warehouse-scale tables.</strong> Comparison loads data locally rather than pushing checksums to the server, so it suits tables that fit comfortably in memory — not billion-row fact tables in Snowflake or BigQuery.</li>
+      <li><strong>No cloud warehouse connectors.</strong> PostgreSQL, MySQL, SQL Server, SQLite and CSV today.</li>
+      <li><strong><span class="mono">migrate</span> generates PostgreSQL only</strong>, and refuses to write DDL for any other target rather than emitting something that will not run.</li>
+      <li><strong>It never applies anything.</strong> There is no <span class="mono">--apply</span> flag and there will not be one.</li>
+      <li><strong>Migrations cover columns, not tables or indexes.</strong> Column additions, removals, type changes and renames — not <span class="mono">CREATE TABLE</span> or index DDL.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="foot-links">
+    <a href="https://github.com/vixinxiviir/biject">GitHub</a>
+    <a href="https://crates.io/crates/biject">crates.io</a>
+    <a href="https://aur.archlinux.org/packages/biject">AUR</a>
+    <a href="https://github.com/vixinxiviir/biject/blob/main/LICENSING.md">Licensing</a>
+    <a href="mailto:licensing@bijection.dev">Contact</a>
+  </div>
+  <p style="margin:0; max-width:none">
+    Bijection is free software under GPL-3.0-only. <span class="mono">migrate</span> is a
+    separate commercial product. Copyright © 2026 Cody Byers.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
