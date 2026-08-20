@@ -11,17 +11,26 @@ on:
 permissions:
   contents: write
 
+env:
+  # apt must never wait on a prompt. Without this, a package that wants to ask
+  # about a config file blocks until the job's timeout rather than failing.
+  DEBIAN_FRONTEND: noninteractive
+  CARGO_TERM_COLOR: always
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A hung step should fail in minutes, not sit until GitHub's six-hour
+    # default. A healthy cold run is well under this; a warm one is minutes.
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo -E apt-get update -qq
+          sudo -E apt-get install -y --no-install-recommends \
             build-essential \
             clang \
             cmake \
@@ -31,28 +40,40 @@ jobs:
             libsoup-3.0-dev \
             libssl-dev \
             librsvg2-dev \
-            pkg-config
+            pkg-config \
+            desktop-file-utils
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
+
+      # Caches the registry and both target directories. Without it every step
+      # below recompiles the whole tree, and this tree contains polars.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tauri-app/src-tauri
 
       - name: Prefetch Rust dependencies
         run: |
           cargo fetch --locked
           cargo fetch --locked --manifest-path tauri-app/src-tauri/Cargo.toml
 
-      - name: Check CLI crate
-        run: cargo check --frozen --locked
-
-      - name: Check Tauri app crate
-        run: cargo check --frozen --locked --manifest-path tauri-app/src-tauri/Cargo.toml
-
       # Runs on every push, PR, and release tag. A failure here blocks the
       # linux-artifacts job, so a release cannot be cut on a red test suite.
+      #
+      # There is deliberately no separate `cargo check` for this crate: the test
+      # build compiles everything a check would, and the two share almost no
+      # artifacts, so running both meant compiling the tree twice for nothing.
       - name: Test CLI crate
         run: cargo test --frozen --locked --all-targets
+
+      # The Tauri crate has no tests, so this is what proves it still compiles.
+      - name: Check Tauri app crate
+        run: cargo check --frozen --locked --manifest-path tauri-app/src-tauri/Cargo.toml
 
       # Denies new lints while grandfathering three that already fire across the
       # existing code. too_many_arguments in particular would mean reshaping
@@ -66,22 +87,21 @@ jobs:
             -A clippy::match_ref_pats
 
       - name: Validate desktop entry
-        run: |
-          sudo apt-get install -y desktop-file-utils
-          desktop-file-validate packaging/aur/biject.desktop
+        run: desktop-file-validate packaging/aur/biject.desktop
 
   linux-artifacts:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     needs: check
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo -E apt-get update -qq
+          sudo -E apt-get install -y --no-install-recommends \
             build-essential \
             clang \
             cmake \
@@ -96,6 +116,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tauri-app/src-tauri
+
       - name: Prefetch Rust dependencies
         run: |
           cargo fetch --locked
@@ -108,13 +135,18 @@ jobs:
           mkdir -p dist
           tar --zstd -cf "dist/biject-vendor-${VERSION}.tar.zst" vendor
 
+      # Installed as a prebuilt binary. Building cargo-about from source added
+      # its entire dependency tree to every release for a tool that runs once.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
       # Regenerated rather than trusting the committed copy, so a dependency
       # added without re-running cargo-about cannot ship stale attribution.
       # Fails the release if any dependency licence is not in about.toml.
       - name: Generate third-party notices
-        run: |
-          cargo install cargo-about --features cli --locked
-          cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
+        run: cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
 
       - name: Build CLI binary
         run: cargo build --frozen --release --locked --bin biject
