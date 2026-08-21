@@ -1,4 +1,5 @@
 use super::ConnectorError;
+use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
 use polars::prelude::*;
 use tokio_postgres::{types::Type, NoTls};
 
@@ -223,6 +224,122 @@ fn days_since_epoch(date: chrono::NaiveDate) -> i32 {
     (date - epoch).num_days() as i32
 }
 
+/// Read column metadata for a table from `information_schema`.
+///
+/// Returns [`CatalogAvailability`] rather than an error or an empty result: a
+/// query that is not a table reference, and a lookup that failed, are different
+/// from a table with no columns, and the caller must be able to tell them apart.
+pub async fn read_catalog(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+    query: &str,
+) -> CatalogAvailability {
+    let Some((schema, table)) = split_table_reference(query) else {
+        return CatalogAvailability::QueryNotATable;
+    };
+
+    match load_catalog(host, port, database, username, password, &schema, &table).await {
+        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Err(err) => CatalogAvailability::Failed(err.to_string()),
+    }
+}
+
+async fn load_catalog(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+    schema: &str,
+    table: &str,
+) -> Result<TableCatalog, ConnectorError> {
+    let connect_str = format!(
+        "host={} port={} dbname={} user={} password={}",
+        host, port, database, username, password
+    );
+
+    let (client, connection) = tokio_postgres::connect(&connect_str, NoTls)
+        .await
+        .map_err(|e| ConnectorError::ConnectionFailed(e.to_string()))?;
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("[biject] postgres connection error: {}", e);
+        }
+    });
+
+    // format_type renders the declared type the way a human writes it —
+    // "character varying(50)" rather than information_schema's bare
+    // "character varying" with the length in a separate column.
+    const CATALOG_QUERY: &str = "
+        SELECT a.attname,
+               format_type(a.atttypid, a.atttypmod) AS declared_type,
+               NOT a.attnotnull                      AS nullable,
+               pg_get_expr(d.adbin, d.adrelid)       AS default_expr,
+               a.attnum
+        FROM pg_attribute a
+        JOIN pg_class c     ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+        WHERE n.nspname = $1
+          AND c.relname = $2
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+        ORDER BY a.attnum";
+
+    let rows = client
+        .query(CATALOG_QUERY, &[&schema, &table])
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    if rows.is_empty() {
+        return Err(ConnectorError::QueryFailed(format!(
+            "no table {schema}.{table} found, or it has no visible columns"
+        )));
+    }
+
+    let columns = rows
+        .iter()
+        .map(|row| ColumnDef {
+            name: row.get::<_, String>(0),
+            data_type: row.get::<_, String>(1),
+            nullable: row.get::<_, bool>(2),
+            default: row.get::<_, Option<String>>(3),
+            ordinal: row.get::<_, i16>(4) as u32,
+        })
+        .collect();
+
+    Ok(TableCatalog { columns })
+}
+
+/// Split a bare table reference into schema and table.
+///
+/// Returns `None` for anything that is a statement rather than a reference,
+/// because a `SELECT` may draw on several tables or none.
+pub(crate) fn split_table_reference(query: &str) -> Option<(String, String)> {
+    let trimmed = query.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+        return None;
+    }
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+
+    let unquote = |part: &str| part.trim().trim_matches('"').to_string();
+    match trimmed.split_once('.') {
+        Some((schema, table)) if !schema.is_empty() && !table.is_empty() => {
+            Some((unquote(schema), unquote(table)))
+        }
+        Some(_) => None,
+        // Postgres resolves an unqualified name through search_path, which
+        // defaults to public.
+        None => Some(("public".to_string(), unquote(trimmed))),
+    }
+}
+
 /// Wrap bare table references in `SELECT * FROM <table>`.
 /// Full SELECT / WITH statements are passed through unchanged.
 fn normalize_query(query: &str) -> String {
@@ -286,6 +403,48 @@ mod tests {
             days_since_epoch(chrono::NaiveDate::from_ymd_opt(1969, 12, 31).unwrap()),
             -1
         );
+    }
+
+    #[test]
+    fn a_bare_name_resolves_through_the_default_schema() {
+        assert_eq!(
+            split_table_reference("customers"),
+            Some(("public".to_string(), "customers".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_qualified_name_keeps_its_schema() {
+        assert_eq!(
+            split_table_reference("reporting.orders"),
+            Some(("reporting".to_string(), "orders".to_string()))
+        );
+        assert_eq!(
+            split_table_reference("\"MySchema\".\"MyTable\""),
+            Some(("MySchema".to_string(), "MyTable".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_statement_has_no_single_table_to_describe() {
+        // A SELECT may join several tables or none, so there is nothing to
+        // look up. The caller reports this rather than guessing.
+        for query in [
+            "SELECT * FROM t",
+            "select id from a join b on a.id = b.id",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "SELECT 1;",
+        ] {
+            assert_eq!(split_table_reference(query), None, "{query}");
+        }
+    }
+
+    #[test]
+    fn malformed_references_are_refused_rather_than_guessed_at() {
+        assert_eq!(split_table_reference(""), None);
+        assert_eq!(split_table_reference("   "), None);
+        assert_eq!(split_table_reference("schema."), None);
+        assert_eq!(split_table_reference(".table"), None);
     }
 
     #[test]
