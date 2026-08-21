@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use crate::catalog::{self, CatalogAvailability, MetadataChange};
 use crate::connectors;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -96,8 +97,42 @@ pub struct SchemaDiffResult {
     pub type_changes: Vec<TypeChange>,
     pub rename_suggestions: Vec<RenameSuggestion>,
     pub compatibility: CompatibilitySummary,
+    /// Schema detail only the database's own catalog can supply: declared
+    /// types, nullability, defaults. Carries why it is missing when it is.
+    pub metadata: MetadataReport,
     pub policy_violations: Vec<String>,
     pub policy_passed: Option<bool>,
+}
+
+/// Catalog-derived findings, and the availability that produced them.
+///
+/// `changes` being empty is meaningless without `source` and `target`: it means
+/// "nothing differed" only when both are available, and "nothing was examined"
+/// otherwise.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetadataReport {
+    pub source: CatalogAvailability,
+    pub target: CatalogAvailability,
+    pub changes: Vec<MetadataChange>,
+}
+
+impl MetadataReport {
+    /// Both sides were read, so an empty `changes` genuinely means no change.
+    pub fn is_complete(&self) -> bool {
+        self.source.is_available() && self.target.is_available()
+    }
+
+    /// Reasons metadata could not be compared, one per side that is missing.
+    pub fn gaps(&self) -> Vec<(&'static str, String)> {
+        let mut gaps = Vec::new();
+        if let Some(reason) = self.source.explain() {
+            gaps.push(("source", reason));
+        }
+        if let Some(reason) = self.target.explain() {
+            gaps.push(("target", reason));
+        }
+        gaps
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -118,7 +153,7 @@ struct AllowedTypeChange {
 
 /// Returns structured schema diff data from pre-loaded DataFrames. Used by the GUI when sources are SQL Server or other connectors.
 pub fn run_schema_diff_frames(df1: DataFrame, df2: DataFrame, source_label: &str, target_label: &str) -> Result<SchemaDiffResult, SchemaDiffError> {
-    run_schema_diff_inner(&df1, &df2, source_label, target_label, None)
+    run_schema_diff_inner(&df1, &df2, source_label, target_label, None, None)
 }
 
 /// Returns structured schema diff data — no terminal output. Used by the GUI and `--json` mode.
@@ -133,10 +168,17 @@ pub fn run_schema_diff(path1: &str, path2: &str, policy_path: Option<&str>) -> R
         .has_header(true)
         .finish()?;
 
-    run_schema_diff_inner(&df1, &df2, path1, path2, policy_path)
+    run_schema_diff_inner(&df1, &df2, path1, path2, policy_path, None)
 }
 
-fn run_schema_diff_inner(df1: &DataFrame, df2: &DataFrame, source_label: &str, target_label: &str, policy_path: Option<&str>) -> Result<SchemaDiffResult, SchemaDiffError> {
+fn run_schema_diff_inner(
+    df1: &DataFrame,
+    df2: &DataFrame,
+    source_label: &str,
+    target_label: &str,
+    policy_path: Option<&str>,
+    catalogs: Option<(CatalogAvailability, CatalogAvailability)>,
+) -> Result<SchemaDiffResult, SchemaDiffError> {
     let source_schema = schema_map(df1)?;
     let target_schema = schema_map(df2)?;
 
@@ -161,7 +203,27 @@ fn run_schema_diff_inner(df1: &DataFrame, df2: &DataFrame, source_label: &str, t
     }
 
     let rename_suggestions = detect_rename_suggestions(&removed, &added, &source_schema, &target_schema);
-    let compatibility = summarize_compatibility(&added, &removed, &type_changes);
+
+    // Absent catalogs are NotRequested rather than any other reason: the caller
+    // did not ask, which is different from asking and being unable.
+    let (source_catalog, target_catalog) = catalogs.unwrap_or((
+        CatalogAvailability::NotRequested,
+        CatalogAvailability::NotRequested,
+    ));
+    let metadata_changes = match (source_catalog.catalog(), target_catalog.catalog()) {
+        (Some(source), Some(target)) => catalog::compare(source, target),
+        _ => Vec::new(),
+    };
+
+    // Computed after the catalog so its findings reach the verdict.
+    let compatibility =
+        summarize_compatibility(&added, &removed, &type_changes, &metadata_changes);
+
+    let metadata = MetadataReport {
+        source: source_catalog,
+        target: target_catalog,
+        changes: metadata_changes,
+    };
 
     let (policy_violations, policy_passed) = if let Some(path) = policy_path {
         let policy = load_policy(path)?;
@@ -185,6 +247,7 @@ fn run_schema_diff_inner(df1: &DataFrame, df2: &DataFrame, source_label: &str, t
         type_changes,
         rename_suggestions,
         compatibility,
+        metadata,
         policy_violations,
         policy_passed,
     })
@@ -204,59 +267,47 @@ pub fn schema_diff(source: &str, target: &str, source_query: Option<&str>, targe
     let df2 = rt.block_on(connectors::load_source(&target_config))
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
 
-    let source_schema = schema_map(&df1)?;
-    let target_schema = schema_map(&df2)?;
+    // Reading the catalog never fails the run: every reason it might be
+    // unavailable is reported to the user instead.
+    let catalogs = (
+        rt.block_on(connectors::read_catalog(&source_config)),
+        rt.block_on(connectors::read_catalog(&target_config)),
+    );
 
-    let source_cols: BTreeSet<String> = source_schema.keys().cloned().collect();
-    let target_cols: BTreeSet<String> = target_schema.keys().cloned().collect();
+    // Built through the same path as the library API rather than reimplemented
+    // here. The two used to duplicate the whole comparison, which meant CLI
+    // output and SchemaDiffResult could drift, and left the command with no
+    // result object to export.
+    let result = run_schema_diff_inner(&df1, &df2, source, target, policy_path, Some(catalogs))?;
 
-    let added: Vec<String> = target_cols.difference(&source_cols).cloned().collect();
-    let removed: Vec<String> = source_cols.difference(&target_cols).cloned().collect();
+    render_schema_report(&result, policy_path);
+    Ok(())
+}
 
-    let mut type_changes = Vec::new();
-    for col in source_cols.intersection(&target_cols) {
-        let source_ty = source_schema
-            .get(col)
-            .ok_or_else(|| anyhow!("Missing source type for column: {col}"))?;
-        let target_ty = target_schema
-            .get(col)
-            .ok_or_else(|| anyhow!("Missing target type for column: {col}"))?;
-
-        if source_ty != target_ty {
-            type_changes.push(TypeChange {
-                column: col.to_string(),
-                source_type: source_ty.clone(),
-                target_type: target_ty.clone(),
-                impact: classify_type_change(source_ty, target_ty),
-            });
-        }
-    }
-
-    let rename_suggestions = detect_rename_suggestions(&removed, &added, &source_schema, &target_schema);
-    let compatibility = summarize_compatibility(&added, &removed, &type_changes);
-
+/// Print a schema comparison.
+fn render_schema_report(result: &SchemaDiffResult, policy_path: Option<&str>) {
     println!("Schema Comparison Results");
     println!("---------------------------");
-    println!("Source file: {}", source);
-    println!("Target file: {}", target);
+    println!("Source file: {}", result.source_path);
+    println!("Target file: {}", result.target_path);
 
-    if added.is_empty() {
+    if result.added.is_empty() {
         println!("No columns added in target.");
     } else {
-        println!("Columns added in target ({}): {:?}", added.len(), added);
+        println!("Columns added in target ({}): {:?}", result.added.len(), result.added);
     }
 
-    if removed.is_empty() {
+    if result.removed.is_empty() {
         println!("No columns removed from source.");
     } else {
-        println!("Columns removed from source ({}): {:?}", removed.len(), removed);
+        println!("Columns removed from source ({}): {:?}", result.removed.len(), result.removed);
     }
 
-    if type_changes.is_empty() {
+    if result.type_changes.is_empty() {
         println!("No type changes across shared columns.");
     } else {
-        println!("Type changes in shared columns ({}):", type_changes.len());
-        for change in &type_changes {
+        println!("Type changes in shared columns ({}):", result.type_changes.len());
+        for change in &result.type_changes {
             println!(
                 "  - {}: {} -> {} ({:?})",
                 change.column, change.source_type, change.target_type, change.impact
@@ -264,11 +315,13 @@ pub fn schema_diff(source: &str, target: &str, source_query: Option<&str>, targe
         }
     }
 
-    if rename_suggestions.is_empty() {
+    render_metadata(&result.metadata);
+
+    if result.rename_suggestions.is_empty() {
         println!("No strong rename candidates found.");
     } else {
         println!("Potential renames:");
-        for rename in &rename_suggestions {
+        for rename in &result.rename_suggestions {
             println!(
                 "  - {} -> {} (confidence {:.2})",
                 rename.source_column, rename.target_column, rename.score
@@ -277,44 +330,51 @@ pub fn schema_diff(source: &str, target: &str, source_query: Option<&str>, targe
     }
 
     println!("Compatibility:");
-    println!("  - Backward compatible: {}", compatibility.backward_compatible);
-    println!("  - Forward compatible: {}", compatibility.forward_compatible);
-    if compatibility.breaking_reasons.is_empty() {
+    println!("  - Backward compatible: {}", result.compatibility.backward_compatible);
+    println!("  - Forward compatible: {}", result.compatibility.forward_compatible);
+    if result.compatibility.breaking_reasons.is_empty() {
         println!("  - Breaking reasons: none");
     } else {
         println!("  - Breaking reasons:");
-        for reason in &compatibility.breaking_reasons {
+        for reason in &result.compatibility.breaking_reasons {
             println!("    - {}", reason);
         }
     }
 
     if let Some(path) = policy_path {
-        let policy = load_policy(path)?;
-        let violations = evaluate_policy(
-            &policy,
-            &source_cols,
-            &target_cols,
-            &added,
-            &removed,
-            &type_changes,
-            &compatibility,
-        );
-
-        if violations.is_empty() {
+        if result.policy_violations.is_empty() {
             println!("Policy check: passed ({})", path);
         } else {
             println!("Policy check: failed ({})", path);
-            for violation in &violations {
+            for violation in &result.policy_violations {
                 println!("  - {}", violation);
-            }
-
-            if policy.fail_on_breaking.unwrap_or(true) {
-                return Err(SchemaDiffError::PolicyViolation("Schema policy violations detected".to_string()));
             }
         }
     }
+}
 
-    Ok(())
+/// Print catalog findings, or say why there are none.
+///
+/// The silence case is the point. Without this, a comparison that never looked
+/// at nullability is indistinguishable from one that looked and found nothing.
+fn render_metadata(metadata: &MetadataReport) {
+    if metadata.is_complete() {
+        if metadata.changes.is_empty() {
+            println!("No column metadata changes (types, nullability, defaults).");
+        } else {
+            println!("Column metadata changes ({}):", metadata.changes.len());
+            for change in &metadata.changes {
+                let marker = if change.is_breaking() { " [breaking]" } else { "" };
+                println!("  - {}{}", change, marker);
+            }
+        }
+        return;
+    }
+
+    println!("Column metadata not compared:");
+    for (side, reason) in metadata.gaps() {
+        println!("  - {}: {}", side, reason);
+    }
 }
 
 fn schema_map(df: &DataFrame) -> Result<HashMap<String, String>> {
@@ -470,6 +530,7 @@ fn summarize_compatibility(
     added: &[String],
     removed: &[String],
     type_changes: &[TypeChange],
+    metadata_changes: &[MetadataChange],
 ) -> CompatibilitySummary {
     let mut breaking_reasons = Vec::new();
 
@@ -495,11 +556,22 @@ fn summarize_compatibility(
         }
     }
 
+    // Catalog findings count towards the verdict. Without this the summary
+    // reported "backward compatible: true, breaking reasons: none" directly
+    // beneath changes the report had just marked [breaking] — a headline
+    // contradicting its own detail, which is worse than not reporting at all.
+    for change in metadata_changes {
+        if change.is_breaking() {
+            breaking_reasons.push(format!("Breaking metadata change: {change}"));
+        }
+    }
+
     let backward_compatible = breaking_reasons.is_empty();
 
     // Forward compatibility is stricter with added columns because old consumers may not expect them.
     let forward_compatible = removed.is_empty()
         && added.is_empty()
+        && metadata_changes.is_empty()
         && type_changes
             .iter()
             .all(|change| change.impact == TypeChangeImpact::SafePromotion);
@@ -620,5 +692,75 @@ mod tests {
     fn similarity_detects_related_tokens() {
         let score = name_similarity("customer_id", "customer_identifier");
         assert!(score > 0.45);
+    }
+}
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use crate::catalog::MetadataChange;
+
+    fn breaking_metadata() -> Vec<MetadataChange> {
+        vec![MetadataChange::Nullability {
+            column: "email".to_string(),
+            now_nullable: true,
+        }]
+    }
+
+    #[test]
+    fn a_breaking_metadata_change_makes_the_verdict_incompatible() {
+        // The report marks these [breaking] in its detail. If the summary did
+        // not agree, it would print "backward compatible: true, breaking
+        // reasons: none" directly beneath them.
+        let summary = summarize_compatibility(&[], &[], &[], &breaking_metadata());
+
+        assert!(!summary.backward_compatible);
+        assert!(!summary.forward_compatible);
+        assert_eq!(summary.breaking_reasons.len(), 1);
+        assert!(summary.breaking_reasons[0].contains("NOT NULL dropped"));
+    }
+
+    #[test]
+    fn the_verdict_never_contradicts_the_detail() {
+        // The invariant, stated directly: if any reported change is breaking,
+        // the summary must not claim backward compatibility.
+        let changes = vec![
+            MetadataChange::NativeType {
+                column: "a".to_string(),
+                from: "character varying(50)".to_string(),
+                to: "text".to_string(),
+            },
+            MetadataChange::Default {
+                column: "b".to_string(),
+                from: None,
+                to: Some("0".to_string()),
+            },
+        ];
+        let summary = summarize_compatibility(&[], &[], &[], &changes);
+
+        let any_breaking = changes.iter().any(|c| c.is_breaking());
+        assert_eq!(summary.backward_compatible, !any_breaking);
+    }
+
+    #[test]
+    fn non_breaking_metadata_still_blocks_forward_compatibility() {
+        // A new default does not break a reader, but an old consumer written
+        // against the previous schema is no longer looking at the same table.
+        let changes = vec![MetadataChange::Default {
+            column: "n".to_string(),
+            from: None,
+            to: Some("0".to_string()),
+        }];
+        let summary = summarize_compatibility(&[], &[], &[], &changes);
+
+        assert!(summary.backward_compatible, "readers are unaffected");
+        assert!(!summary.forward_compatible);
+    }
+
+    #[test]
+    fn no_metadata_changes_leaves_the_verdict_untouched() {
+        let summary = summarize_compatibility(&[], &[], &[], &[]);
+        assert!(summary.backward_compatible);
+        assert!(summary.forward_compatible);
+        assert!(summary.breaking_reasons.is_empty());
     }
 }

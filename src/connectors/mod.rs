@@ -136,6 +136,41 @@ pub async fn load_source(config: &SourceConfig) -> Result<DataFrame, ConnectorEr
     }
 }
 
+/// Read column metadata for a source, if its engine can supply any.
+///
+/// Never returns an error: every reason metadata might be missing is a variant
+/// of [`CatalogAvailability`], so the caller can explain the gap rather than
+/// silently reporting less. A connector that cannot do this yet says so by
+/// name instead of pretending the source has no catalog.
+pub async fn read_catalog(config: &SourceConfig) -> crate::catalog::CatalogAvailability {
+    use crate::catalog::CatalogAvailability;
+
+    match config {
+        SourceConfig::File { .. } => CatalogAvailability::NotADatabase,
+        SourceConfig::Postgres {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            postgres::read_catalog(
+                host,
+                port.unwrap_or(5432),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
+        }
+        SourceConfig::Mysql { .. } => CatalogAvailability::UnsupportedEngine("MySQL"),
+        SourceConfig::SqlServer { .. } => CatalogAvailability::UnsupportedEngine("SQL Server"),
+        SourceConfig::Sqlite { .. } => CatalogAvailability::UnsupportedEngine("SQLite"),
+    }
+}
+
 /// Parse a source string into a [`SourceConfig`].
 ///
 /// Recognised schemes:

@@ -73,6 +73,12 @@ pub enum CatalogAvailability {
     /// The source is a database and the query names a table, but reading the
     /// catalog failed. Carries the reason; never silently treated as absent.
     Failed(String),
+    /// This connector cannot read catalogs yet. Distinct from a failure: the
+    /// lookup was never attempted because the code does not exist.
+    UnsupportedEngine(&'static str),
+    /// The caller did not ask for metadata. Distinct from every other variant:
+    /// nothing was wrong, nothing was tried.
+    NotRequested,
 }
 
 impl CatalogAvailability {
@@ -101,6 +107,12 @@ impl CatalogAvailability {
             ),
             CatalogAvailability::Failed(reason) => {
                 Some(format!("reading the catalog failed: {reason}"))
+            }
+            CatalogAvailability::UnsupportedEngine(engine) => Some(format!(
+                "{engine} catalog reading is not implemented yet"
+            )),
+            CatalogAvailability::NotRequested => {
+                Some("metadata was not requested".to_string())
             }
         }
     }
@@ -404,6 +416,35 @@ mod tests {
         assert!(available.explain().is_none());
         assert!(available.is_available());
         assert!(available.catalog().is_some());
+    }
+
+    #[test]
+    fn every_reason_for_absence_is_distinguishable() {
+        // Six different situations, and none may be allowed to read as
+        // "nothing changed". Conflating any two of them is the bug this whole
+        // enum exists to prevent.
+        let reasons = [
+            CatalogAvailability::NotADatabase,
+            CatalogAvailability::QueryNotATable,
+            CatalogAvailability::Failed("timeout".into()),
+            CatalogAvailability::UnsupportedEngine("MySQL"),
+            CatalogAvailability::NotRequested,
+        ];
+        let explanations: Vec<String> =
+            reasons.iter().map(|r| r.explain().unwrap()).collect();
+
+        let unique: std::collections::BTreeSet<&String> = explanations.iter().collect();
+        assert_eq!(unique.len(), explanations.len(), "{explanations:?}");
+        assert!(reasons.iter().all(|r| !r.is_available()));
+    }
+
+    #[test]
+    fn an_unimplemented_connector_names_itself() {
+        let reason = CatalogAvailability::UnsupportedEngine("MySQL")
+            .explain()
+            .unwrap();
+        assert!(reason.contains("MySQL"), "{reason}");
+        assert!(reason.contains("not implemented"), "{reason}");
     }
 
     #[test]
