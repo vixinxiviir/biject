@@ -273,12 +273,14 @@ ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;
     of the version you bought, forever.
   </p>
   <div class="cta-row">
-    <!-- REPLACE with the merchant-of-record checkout URL before launch. -->
-    <a class="btn btn-primary" href="#" data-checkout-placeholder>Buy a licence — $39</a>
+    <!-- No checkout yet. Replace this with the merchant-of-record buy button
+         when licences go on sale; a CTA that goes nowhere is worse than none. -->
+    <span class="btn btn-secondary" aria-disabled="true">Licences available soon</span>
     <span class="cta-note">30-day refund, no questions asked.</span>
   </div>
   <p class="muted" style="font-size:14.5px">
-    Questions before buying: <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>.
+    Want one before then, or have a question?
+    <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>.
   </p>
 </section>
 
