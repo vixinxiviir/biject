@@ -60,10 +60,90 @@ fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Runtime::new().unwrap()
 }
 
+/// Create the fixture tables, exactly once per test process.
+///
+/// Done from Rust rather than an external .sql file so a run needs only a
+/// database URL — no psql on the machine, and no setup step to forget in CI.
+///
+/// The `Once` is load-bearing. Cargo runs a test binary's tests as threads in
+/// one process, so without it every test issues the same DROP and CREATE
+/// concurrently and they collide:
+///
+/// ```text
+/// duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+/// ```
+///
+/// That only shows up against a fresh database — once the tables exist the
+/// race is survivable — which made it invisible on a re-run and obvious on a
+/// clean container.
+fn setup(dsn: &str) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| create_fixtures(dsn));
+}
+
+fn create_fixtures(dsn: &str) {
+    use tokio_postgres::NoTls;
+
+    const DDL: &str = "
+        DROP TABLE IF EXISTS dev;
+        DROP SCHEMA IF EXISTS reporting CASCADE;
+
+        CREATE TABLE dev (
+          id BIGINT NOT NULL,
+          name VARCHAR(50),
+          note TEXT NOT NULL DEFAULT '',
+          amount NUMERIC(12,4) NOT NULL,
+          created TIMESTAMPTZ DEFAULT now()
+        );
+
+        CREATE SCHEMA reporting;
+        CREATE TABLE reporting.prod (
+          id BIGINT NOT NULL,
+          name TEXT,
+          note TEXT,
+          amount NUMERIC(12,4) NOT NULL DEFAULT 0,
+          created TIMESTAMPTZ DEFAULT now()
+        );";
+
+    // Reuse the project's own URI parsing so the fixture speaks the same
+    // dialect of connection string the tool does.
+    let SourceConfig::Postgres {
+        host,
+        port,
+        database,
+        username,
+        password,
+        ..
+    } = parse_source_uri(dsn, Some("dev")).expect("valid dsn")
+    else {
+        panic!("BIJECT_TEST_PG must be a postgres:// URL");
+    };
+
+    runtime().block_on(async {
+        let conn_str = format!(
+            "host={} port={} dbname={} user={} password={}",
+            host,
+            port.unwrap_or(5432),
+            database,
+            username,
+            password
+        );
+        let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
+            .await
+            .expect("connect to the test database");
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client.batch_execute(DDL).await.expect("create fixtures");
+    });
+}
+
 #[test]
 #[ignore = "needs a live PostgreSQL"]
 fn reads_declared_types_nullability_and_defaults() {
-    let availability = runtime().block_on(read(&dsn(), "dev"));
+    let dsn = dsn();
+    setup(&dsn);
+    let availability = runtime().block_on(read(&dsn, "dev"));
 
     let catalog = availability
         .catalog()
@@ -94,6 +174,7 @@ fn reads_declared_types_nullability_and_defaults() {
 #[ignore = "needs a live PostgreSQL"]
 fn finds_changes_a_dataframe_comparison_cannot_see() {
     let dsn = dsn();
+    setup(&dsn);
     let rt = runtime();
 
     let source = rt.block_on(read(&dsn, "dev"));
@@ -123,14 +204,18 @@ fn finds_changes_a_dataframe_comparison_cannot_see() {
 #[test]
 #[ignore = "needs a live PostgreSQL"]
 fn a_qualified_table_in_another_schema_resolves() {
-    let availability = runtime().block_on(read(&dsn(), "reporting.prod"));
+    let dsn = dsn();
+    setup(&dsn);
+    let availability = runtime().block_on(read(&dsn, "reporting.prod"));
     assert!(availability.is_available(), "{availability:?}");
 }
 
 #[test]
 #[ignore = "needs a live PostgreSQL"]
 fn a_select_reports_that_there_is_no_table_to_describe() {
-    let availability = runtime().block_on(read(&dsn(), "SELECT id FROM dev"));
+    let dsn = dsn();
+    setup(&dsn);
+    let availability = runtime().block_on(read(&dsn, "SELECT id FROM dev"));
 
     assert!(matches!(availability, CatalogAvailability::QueryNotATable));
     assert!(availability.explain().unwrap().contains("SELECT"));

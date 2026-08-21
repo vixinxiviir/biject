@@ -24,6 +24,23 @@ jobs:
     # default. A healthy cold run is well under this; a warm one is minutes.
     timeout-minutes: 45
 
+    # Every connector defect found in this project was invisible to a passing
+    # unit-test suite and obvious against a real database. The integration
+    # tests are #[ignore] so they never run by accident; here they always do.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: bijecttest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +102,12 @@ jobs:
             -A clippy::too_many_arguments \
             -A clippy::needless_range_loop \
             -A clippy::match_ref_pats
+
+      # Seeds its own fixtures, so there is no SQL file or psql dependency.
+      - name: Test against a real PostgreSQL
+        env:
+          BIJECT_TEST_PG: postgres://postgres:test@localhost:5432/bijecttest
+        run: cargo test --frozen --locked --test catalog_postgres -- --ignored
 
       - name: Validate desktop entry
         run: desktop-file-validate packaging/aur/biject.desktop
