@@ -18,7 +18,7 @@ The project currently ships in two forms:
 
 | Surface | Sources | Best for |
 | --- | --- | --- |
-| `biject` CLI | CSV files | automation, CI checks, manifest-driven batch runs |
+| `biject` CLI | CSV, PostgreSQL, MySQL/MariaDB, SQL Server, SQLite | automation, CI checks, manifest-driven batch runs |
 | `biject-gui` desktop app | CSV, SQL Server, PostgreSQL, MySQL/MariaDB, SQLite | ad hoc inspection, side-by-side comparisons, saved connection profiles |
 
 ## Features
@@ -29,7 +29,7 @@ The project currently ships in two forms:
 - **Policy-Driven Validation** — enforce schema contracts (required columns, forbidden removals, allowed type promotions)
 - **Flexible Output** — export results as JSON or CSV for downstream automation
 - **Desktop App** — side-by-side GUI built with Tauri for interactive schema and data diffing
-- **Database Connectors** — SQL Server, PostgreSQL, MySQL/MariaDB, and SQLite sources in the desktop app
+- **Database Connectors** — SQL Server, PostgreSQL, MySQL/MariaDB, and SQLite, in both the CLI and the desktop app
 - **Scalable** — optimized for large datasets with early termination and column filtering
 
 ## Installation
@@ -97,7 +97,8 @@ Use the desktop app when you want to diff database queries or inspect changes in
 
 ### 1. Basic Schema Comparison
 
-Compare two CSV files to see what columns changed:
+Compare two sources to see what columns changed. These are CSVs; a
+`postgres://` URI with `--source-query` works the same way:
 
 ```bash
 biject schema \
@@ -109,7 +110,20 @@ Output includes:
 - Columns added in target
 - Columns removed from source
 - Type changes and impact classification (SafePromotion, RiskyConversion, Breaking)
+- Column metadata changes — declared type, nullability and defaults — when both
+  sides are database tables, or a note saying why they could not be read
 - Backward and forward compatibility assessment
+
+Options:
+- `--source-query` / `--target-query` — table name or SQL query, required for database URIs
+- `--policy` — path to a JSON schema policy file to assert against
+- `--output` — file to write the comparison to; requires `--format`
+- `--format` — `json` for the full result, or `csv` for a flat list of findings
+
+Unlike `data`, `--output` here is the file itself rather than a base name, since
+a schema comparison is a single document. Both formats state when column
+metadata could not be read and why, so an export showing no metadata changes is
+never confused with one where the catalog was never examined.
 
 ### 2. Data Diffing with Primary Keys
 
@@ -121,18 +135,6 @@ biject data \
   --target silver_customers.csv \
   --key customer_id
 ```
-
-Schema options:
-- `--policy` — path to a JSON schema policy file to assert against
-- `--output` — file to write the comparison to; requires `--format`
-- `--format` — `json` for the full result, or `csv` for a flat list of findings
-
-Unlike `data`, `--output` here is the file itself rather than a base name, since
-a schema comparison is a single document.
-
-Both formats state when column metadata could not be read and why, so an export
-showing no metadata changes is never confused with one where the catalog was
-never examined.
 
 Options:
 - `--key` — one or more column names for row matching (can repeat: `--key id --key date`)
@@ -354,7 +356,7 @@ biject batch \
 Normal when schemas match. Check file paths and CSV encoding.
 
 **Error: "CSV parsing failed"**  
-Verify the input is a standard CSV with the expected delimiter, quotes, and encoding. The CLI currently documents and targets CSV inputs only.
+Verify the input is a standard CSV with the expected delimiter, quotes, and encoding.
 
 **`--output` or `--format` is rejected**  
 Use them together. The CLI requires `--output` and `--format` as a pair, while `--temp` is an alternative output mode.
@@ -365,8 +367,17 @@ The key you chose is not unique in that file, so rows cannot be paired one-to-on
 **Batch run fails on one pair but not others**  
 Run the failing pair directly with `biject data` using the same filters, or rerun the batch with `--fail-fast` to stop at the first failing entry.
 
-**Database sources are not available in the CLI**  
-That is expected. Database connectors currently live in the desktop app, not the `biject` CLI.
+**Connecting to a database from the CLI**  
+Pass a URI as `--source` or `--target`, with `--source-query` / `--target-query` giving a table name or SQL query:
+
+```bash
+biject schema   --source postgres://user:pass@localhost:5432/dev --source-query public.orders   --target postgres://user:pass@localhost:5432/prod --target-query public.orders
+```
+
+Supported schemes are `postgres://`, `mysql://`, `sqlserver://` and `sqlite://`. Anything else is treated as a CSV path.
+
+**Column metadata is not being compared**  
+Declared types, nullability and defaults come from the database catalog, which needs a table rather than a query, and a connector that can read it. The report always says which of those is missing. PostgreSQL is supported today; MySQL, SQL Server and SQLite say so explicitly until their readers land.
 
 **Type classification seems wrong**  
 Polars infers schema from the first 100 rows. If a CSV column contains mixed types, normalize the input first so the sampled rows reflect the full dataset.
