@@ -37,6 +37,12 @@ pub enum Commands {
 
         #[arg(long, help = "Optional path to a JSON schema policy/contract file")]
         policy: Option<String>,
+
+        #[arg(long, help = "File to write the comparison to; requires --format")]
+        output: Option<String>,
+
+        #[arg(long, value_enum, help = "Export format: json or csv; requires --output")]
+        format: Option<data::ExportFormat>,
     },
     Data {
         #[arg(short, long)]
@@ -134,8 +140,20 @@ pub fn dispatch(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
             source_query,
             target_query,
             policy,
+            output,
+            format,
         } => {
-            schema::schema_diff(&source, &target, source_query.as_deref(), target_query.as_deref(), policy.as_deref())?;
+            // Same both-or-neither rule the data command enforces.
+            data::validate_export_args(output.as_deref(), format.as_ref(), false)?;
+            schema::schema_diff(
+                &source,
+                &target,
+                source_query.as_deref(),
+                target_query.as_deref(),
+                policy.as_deref(),
+                output.as_deref(),
+                format,
+            )?;
         }
         Commands::Data {
             source,

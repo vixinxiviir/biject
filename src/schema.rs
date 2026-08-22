@@ -253,7 +253,15 @@ fn run_schema_diff_inner(
     })
 }
 
-pub fn schema_diff(source: &str, target: &str, source_query: Option<&str>, target_query: Option<&str>, policy_path: Option<&str>) -> Result<(), SchemaDiffError> {
+pub fn schema_diff(
+    source: &str,
+    target: &str,
+    source_query: Option<&str>,
+    target_query: Option<&str>,
+    policy_path: Option<&str>,
+    output: Option<&str>,
+    format: Option<crate::data::ExportFormat>,
+) -> Result<(), SchemaDiffError> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| SchemaDiffError::DataLoadError(format!("Failed to create async runtime: {}", e)))?;
 
@@ -281,7 +289,124 @@ pub fn schema_diff(source: &str, target: &str, source_query: Option<&str>, targe
     let result = run_schema_diff_inner(&df1, &df2, source, target, policy_path, Some(catalogs))?;
 
     render_schema_report(&result, policy_path);
+
+    if let (Some(path), Some(format)) = (output, format) {
+        export_schema(path, format, &result)?;
+        println!("
+Exported schema comparison to: {path}");
+    }
+
     Ok(())
+}
+
+/// Write a schema comparison to a file.
+///
+/// Unlike `data`, which writes several files into a generated folder, this is
+/// a single document and goes exactly where it is told.
+fn export_schema(
+    path: &str,
+    format: crate::data::ExportFormat,
+    result: &SchemaDiffResult,
+) -> Result<(), SchemaDiffError> {
+    use std::io::Write;
+
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
+        }
+    }
+
+    match format {
+        crate::data::ExportFormat::Json => {
+            let json = serde_json::to_string_pretty(result)?;
+            std::fs::write(path, json)
+                .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
+        }
+        crate::data::ExportFormat::Csv => {
+            let file = std::fs::File::create(path)
+                .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
+            let mut writer = std::io::BufWriter::new(file);
+            for line in schema_csv_rows(result) {
+                writeln!(writer, "{line}")
+                    .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
+            }
+            writer
+                .flush()
+                .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Flatten a comparison into one row per finding.
+///
+/// Metadata availability is emitted as rows of its own. Without them a CSV
+/// showing no metadata changes would be indistinguishable from one where
+/// metadata was never examined — the same ambiguity the terminal report and
+/// the JSON export both take care to avoid.
+fn schema_csv_rows(result: &SchemaDiffResult) -> Vec<String> {
+    use crate::data::csv_escape;
+
+    let row = |category: &str, column: &str, detail: &str, from: &str, to: &str, breaking: bool| {
+        format!(
+            "{},{},{},{},{},{}",
+            csv_escape(category),
+            csv_escape(column),
+            csv_escape(detail),
+            csv_escape(from),
+            csv_escape(to),
+            breaking
+        )
+    };
+
+    let mut rows = vec!["category,column,detail,from,to,breaking".to_string()];
+
+    for column in &result.added {
+        rows.push(row("added_column", column, "", "", "", false));
+    }
+    for column in &result.removed {
+        rows.push(row("removed_column", column, "", "", "", true));
+    }
+    for change in &result.type_changes {
+        rows.push(row(
+            "type_change",
+            &change.column,
+            &format!("{:?}", change.impact),
+            &change.source_type,
+            &change.target_type,
+            change.impact != TypeChangeImpact::SafePromotion,
+        ));
+    }
+    for change in &result.metadata.changes {
+        rows.push(row(
+            "metadata_change",
+            change.column(),
+            &change.to_string(),
+            "",
+            "",
+            change.is_breaking(),
+        ));
+    }
+    for (side, reason) in result.metadata.gaps() {
+        rows.push(row("metadata_not_compared", side, &reason, "", "", false));
+    }
+    for rename in &result.rename_suggestions {
+        rows.push(row(
+            "rename_suggestion",
+            &rename.source_column,
+            &format!("confidence {:.2}", rename.score),
+            &rename.source_column,
+            &rename.target_column,
+            false,
+        ));
+    }
+    for reason in &result.compatibility.breaking_reasons {
+        rows.push(row("breaking_reason", "", reason, "", "", true));
+    }
+
+    rows
 }
 
 /// Print a schema comparison.
@@ -762,5 +887,116 @@ mod compatibility_tests {
         assert!(summary.backward_compatible);
         assert!(summary.forward_compatible);
         assert!(summary.breaking_reasons.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use crate::catalog::{CatalogAvailability, ColumnDef, MetadataChange, TableCatalog};
+
+    fn column(name: &str, data_type: &str, nullable: bool) -> ColumnDef {
+        ColumnDef {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            nullable,
+            default: None,
+            ordinal: 1,
+        }
+    }
+
+    fn result_with(metadata: MetadataReport) -> SchemaDiffResult {
+        SchemaDiffResult {
+            source_path: "a".into(),
+            target_path: "b".into(),
+            source_schema: Default::default(),
+            target_schema: Default::default(),
+            added: vec![],
+            removed: vec![],
+            type_changes: vec![],
+            rename_suggestions: vec![],
+            compatibility: CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            metadata,
+            policy_violations: vec![],
+            policy_passed: None,
+        }
+    }
+
+    #[test]
+    fn csv_states_when_metadata_was_never_examined() {
+        // Without these rows, a CSV with no metadata_change lines is
+        // indistinguishable from one where the catalog was never read. The
+        // terminal report and JSON both avoid that ambiguity; CSV must too.
+        let rows = schema_csv_rows(&result_with(MetadataReport {
+            source: CatalogAvailability::NotADatabase,
+            target: CatalogAvailability::UnsupportedEngine("MySQL"),
+            changes: vec![],
+        }));
+
+        let gaps: Vec<&String> = rows
+            .iter()
+            .filter(|r| r.starts_with("metadata_not_compared"))
+            .collect();
+        assert_eq!(gaps.len(), 2, "one per side: {rows:?}");
+        assert!(gaps.iter().any(|r| r.contains("no catalog")));
+        assert!(gaps.iter().any(|r| r.contains("MySQL")));
+    }
+
+    #[test]
+    fn csv_omits_gap_rows_when_both_sides_were_read() {
+        let rows = schema_csv_rows(&result_with(MetadataReport {
+            source: CatalogAvailability::Available(TableCatalog {
+                columns: vec![column("id", "bigint", false)],
+            }),
+            target: CatalogAvailability::Available(TableCatalog {
+                columns: vec![column("id", "bigint", false)],
+            }),
+            changes: vec![],
+        }));
+
+        assert!(!rows.iter().any(|r| r.starts_with("metadata_not_compared")));
+    }
+
+    #[test]
+    fn csv_marks_breaking_changes() {
+        let rows = schema_csv_rows(&result_with(MetadataReport {
+            source: CatalogAvailability::Available(TableCatalog::default()),
+            target: CatalogAvailability::Available(TableCatalog::default()),
+            changes: vec![
+                MetadataChange::Nullability {
+                    column: "email".into(),
+                    now_nullable: true,
+                },
+                MetadataChange::Default {
+                    column: "n".into(),
+                    from: None,
+                    to: Some("0".into()),
+                },
+            ],
+        }));
+
+        let nullability = rows.iter().find(|r| r.contains("NOT NULL dropped")).unwrap();
+        assert!(nullability.ends_with(",true"), "{nullability}");
+        let default = rows.iter().find(|r| r.contains("default none -> 0")).unwrap();
+        assert!(default.ends_with(",false"), "{default}");
+    }
+
+    #[test]
+    fn csv_has_a_header_and_a_stable_column_count() {
+        let rows = schema_csv_rows(&result_with(MetadataReport {
+            source: CatalogAvailability::NotADatabase,
+            target: CatalogAvailability::NotADatabase,
+            changes: vec![],
+        }));
+
+        assert_eq!(rows[0], "category,column,detail,from,to,breaking");
+        let fields = rows[0].split(',').count();
+        for row in &rows[1..] {
+            assert_eq!(row.split(',').count(), fields, "ragged row: {row}");
+        }
     }
 }

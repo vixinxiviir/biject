@@ -1438,7 +1438,7 @@ fn csv_writer(path: &Path) -> Result<BufWriter<File>> {
     Ok(BufWriter::new(file))
 }
 
-fn csv_escape(value: &str) -> String {
+pub(crate) fn csv_escape(value: &str) -> String {
     if value.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {

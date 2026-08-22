@@ -122,6 +122,18 @@ biject data \
   --key customer_id
 ```
 
+Schema options:
+- `--policy` — path to a JSON schema policy file to assert against
+- `--output` — file to write the comparison to; requires `--format`
+- `--format` — `json` for the full result, or `csv` for a flat list of findings
+
+Unlike `data`, `--output` here is the file itself rather than a base name, since
+a schema comparison is a single document.
+
+Both formats state when column metadata could not be read and why, so an export
+showing no metadata changes is never confused with one where the catalog was
+never examined.
+
 Options:
 - `--key` — one or more column names for row matching (can repeat: `--key id --key date`)
 - `--exclude-columns` — skip comparing certain columns (comma-separated: `--exclude-columns created_at,updated_at`)
