@@ -118,6 +118,84 @@ impl CatalogAvailability {
     }
 }
 
+/// How a change of declared type affects something reading the column.
+///
+/// Only same-family changes are classified. Deciding that `varchar(50)` to
+/// `text` is safe requires knowing each engine's type families, which is a
+/// per-dialect equivalence matrix and deliberately out of scope; those stay
+/// `Unknown` and are treated as breaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeImpact {
+    /// Same type, more capacity. `varchar(50)` to `varchar(200)`. Safe.
+    Widening,
+    /// Same type, less capacity. `varchar(200)` to `varchar(50)`. Can truncate.
+    Narrowing,
+    /// Different base types, or parameters that cannot be compared.
+    Unknown,
+}
+
+/// Sentinel for an unbounded length, such as SQL Server's `varchar(max)`.
+const UNBOUNDED: u64 = u64::MAX;
+
+/// Classify a change between two declared types.
+pub fn classify_type_change(from: &str, to: &str) -> TypeImpact {
+    let (from_base, from_params) = split_type(from);
+    let (to_base, to_params) = split_type(to);
+
+    if from_base != to_base || from_params.len() != to_params.len() {
+        return TypeImpact::Unknown;
+    }
+
+    // Equal parameter counts on the same base: compare position by position.
+    let grew = from_params
+        .iter()
+        .zip(&to_params)
+        .any(|(before, after)| after > before);
+    let shrank = from_params
+        .iter()
+        .zip(&to_params)
+        .any(|(before, after)| after < before);
+
+    match (grew, shrank) {
+        // Anything smaller can lose data, even if something else grew:
+        // decimal(12,4) to decimal(18,2) keeps more digits and fewer decimals.
+        (_, true) => TypeImpact::Narrowing,
+        (true, false) => TypeImpact::Widening,
+        (false, false) => TypeImpact::Unknown,
+    }
+}
+
+/// Split `varchar(50)` into `("varchar", [50])`.
+///
+/// A non-numeric parameter other than `max` yields no parameters, which forces
+/// `Unknown` rather than a guess.
+fn split_type(declared: &str) -> (String, Vec<u64>) {
+    let trimmed = declared.trim().to_ascii_lowercase();
+    let Some(open) = trimmed.find('(') else {
+        return (trimmed, Vec::new());
+    };
+    let base = trimmed[..open].trim().to_string();
+    let Some(close) = trimmed.rfind(')') else {
+        return (trimmed, Vec::new());
+    };
+
+    let mut params = Vec::new();
+    for part in trimmed[open + 1..close].split(',') {
+        let part = part.trim();
+        if part == "max" {
+            params.push(UNBOUNDED);
+        } else if let Ok(value) = part.parse::<u64>() {
+            params.push(value);
+        } else {
+            // An unparseable parameter means the comparison cannot be trusted.
+            return (base, Vec::new());
+        }
+    }
+
+    (base, params)
+}
+
 /// A change to a column that only the catalog can reveal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -128,6 +206,7 @@ pub enum MetadataChange {
         column: String,
         from: String,
         to: String,
+        impact: TypeImpact,
     },
     /// A column became nullable, or stopped being.
     Nullability {
@@ -168,7 +247,9 @@ impl MetadataChange {
             // A column that may now be null will surprise code that assumed
             // it never was.
             MetadataChange::Nullability { now_nullable, .. } => *now_nullable,
-            MetadataChange::NativeType { .. } => true,
+            // A widening is safe for readers. Treating every declared-type
+            // change as breaking made a lengthened varchar fail a CI gate.
+            MetadataChange::NativeType { impact, .. } => *impact != TypeImpact::Widening,
             MetadataChange::Default { .. } => false,
             MetadataChange::Ordinal { .. } => false,
         }
@@ -178,8 +259,18 @@ impl MetadataChange {
 impl fmt::Display for MetadataChange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MetadataChange::NativeType { column, from, to } => {
-                write!(f, "{column}: {from} -> {to}")
+            MetadataChange::NativeType {
+                column,
+                from,
+                to,
+                impact,
+            } => {
+                let note = match impact {
+                    TypeImpact::Widening => " (widening)",
+                    TypeImpact::Narrowing => " (narrowing)",
+                    TypeImpact::Unknown => "",
+                };
+                write!(f, "{column}: {from} -> {to}{note}")
             }
             MetadataChange::Nullability {
                 column,
@@ -222,6 +313,7 @@ pub fn compare(source: &TableCatalog, target: &TableCatalog) -> Vec<MetadataChan
                 column: column.name.clone(),
                 from: column.data_type.clone(),
                 to: other.data_type.clone(),
+                impact: classify_type_change(&column.data_type, &other.data_type),
             });
         }
 
@@ -388,6 +480,115 @@ mod tests {
         let changes = compare(&source, &target);
         assert_eq!(changes.len(), 3, "type, nullability and default: {changes:?}");
         assert!(changes.iter().all(|change| change.column() == "c"));
+    }
+
+
+    // ---- native type impact ----
+
+    #[test]
+    fn a_longer_string_is_a_widening() {
+        // The false positive that motivated this: reported as breaking, it made
+        // a whole comparison backward-incompatible and would fail a CI gate
+        // that should have passed.
+        assert_eq!(
+            classify_type_change("varchar(50)", "varchar(200)"),
+            TypeImpact::Widening
+        );
+        assert_eq!(
+            classify_type_change("nvarchar(100)", "nvarchar(4000)"),
+            TypeImpact::Widening
+        );
+    }
+
+    #[test]
+    fn a_shorter_string_is_a_narrowing() {
+        assert_eq!(
+            classify_type_change("varchar(200)", "varchar(50)"),
+            TypeImpact::Narrowing
+        );
+    }
+
+    #[test]
+    fn unbounded_is_larger_than_any_length() {
+        assert_eq!(
+            classify_type_change("varchar(50)", "varchar(max)"),
+            TypeImpact::Widening
+        );
+        assert_eq!(
+            classify_type_change("varchar(max)", "varchar(50)"),
+            TypeImpact::Narrowing
+        );
+    }
+
+    #[test]
+    fn more_precision_at_the_same_scale_is_a_widening() {
+        assert_eq!(
+            classify_type_change("decimal(12,4)", "decimal(18,4)"),
+            TypeImpact::Widening
+        );
+    }
+
+    #[test]
+    fn losing_scale_is_narrowing_even_when_precision_grows() {
+        // decimal(18,2) holds more digits but fewer decimals than
+        // decimal(12,4), so it can still lose data.
+        assert_eq!(
+            classify_type_change("decimal(12,4)", "decimal(18,2)"),
+            TypeImpact::Narrowing
+        );
+    }
+
+    #[test]
+    fn a_different_base_type_is_not_classified() {
+        // varchar to text is a widening in practice, but knowing that requires
+        // per-engine type families. Unknown is treated as breaking, which errs
+        // towards warning rather than towards silence.
+        assert_eq!(
+            classify_type_change("character varying(50)", "text"),
+            TypeImpact::Unknown
+        );
+        assert_eq!(classify_type_change("int", "bigint"), TypeImpact::Unknown);
+    }
+
+    #[test]
+    fn spelling_and_spacing_do_not_affect_classification() {
+        assert_eq!(
+            classify_type_change("VARCHAR(50)", "varchar( 200 )"),
+            TypeImpact::Widening
+        );
+    }
+
+    #[test]
+    fn an_unparseable_parameter_falls_back_to_unknown() {
+        assert_eq!(
+            classify_type_change("enum('a','b')", "enum('a','b','c')"),
+            TypeImpact::Unknown
+        );
+    }
+
+    #[test]
+    fn only_a_narrowing_or_an_unclassified_change_is_breaking() {
+        let change = |from: &str, to: &str| MetadataChange::NativeType {
+            column: "c".to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+            impact: classify_type_change(from, to),
+        };
+
+        assert!(!change("varchar(50)", "varchar(200)").is_breaking());
+        assert!(change("varchar(200)", "varchar(50)").is_breaking());
+        assert!(change("varchar(50)", "text").is_breaking());
+    }
+
+    #[test]
+    fn a_widening_says_so_when_displayed() {
+        let widened = MetadataChange::NativeType {
+            column: "name".to_string(),
+            from: "varchar(50)".to_string(),
+            to: "varchar(200)".to_string(),
+            impact: TypeImpact::Widening,
+        };
+        assert_eq!(widened.to_string(), "name: varchar(50) -> varchar(200) (widening)");
     }
 
     // ---- availability ----

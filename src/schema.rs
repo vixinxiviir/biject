@@ -853,6 +853,7 @@ mod compatibility_tests {
                 column: "a".to_string(),
                 from: "character varying(50)".to_string(),
                 to: "text".to_string(),
+                impact: crate::catalog::TypeImpact::Unknown,
             },
             MetadataChange::Default {
                 column: "b".to_string(),
