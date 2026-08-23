@@ -1,4 +1,5 @@
 use super::ConnectorError;
+use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
 use polars::prelude::*;
 use tiberius::{AuthMethod, Client, ColumnData, ColumnType, Config};
 use tokio::net::TcpStream;
@@ -327,6 +328,178 @@ fn render_text(cell: &ColumnData<'static>) -> Option<String> {
     }
 }
 
+/// Read column metadata from `INFORMATION_SCHEMA.COLUMNS`.
+///
+/// Returns [`CatalogAvailability`] rather than an error: a query that is not a
+/// table reference and a lookup that failed are different from a table with no
+/// columns, and the caller must be able to tell them apart.
+pub async fn read_catalog(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+    query: &str,
+) -> CatalogAvailability {
+    let Some((schema, table)) = split_table_reference(query) else {
+        return CatalogAvailability::QueryNotATable;
+    };
+
+    match load_catalog(host, port, database, username, password, &schema, &table).await {
+        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Err(err) => CatalogAvailability::Failed(err.to_string()),
+    }
+}
+
+async fn load_catalog(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+    schema: &str,
+    table: &str,
+) -> Result<TableCatalog, ConnectorError> {
+    let mut config = Config::new();
+    config.host(host);
+    config.port(port);
+    config.database(database);
+    config.authentication(AuthMethod::sql_server(username, password));
+    config.trust_cert();
+
+    let addr = config.get_addr();
+    let tcp = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| ConnectorError::ConnectionFailed(e.to_string()))?;
+    tcp.set_nodelay(true)
+        .map_err(|e| ConnectorError::ConnectionFailed(e.to_string()))?;
+    let mut client = Client::connect(config, tcp.compat_write())
+        .await
+        .map_err(|e| ConnectorError::ConnectionFailed(e.to_string()))?;
+
+    // Unlike Postgres and MySQL, SQL Server offers no single column holding the
+    // declared type in full, so the parts come back separately and are
+    // reassembled by render_declared_type.
+    const CATALOG_QUERY: &str = "
+        SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
+               NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+               IS_NULLABLE, COLUMN_DEFAULT, ORDINAL_POSITION
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = @P1 AND TABLE_NAME = @P2
+        ORDER BY ORDINAL_POSITION";
+
+    let rows = client
+        .query(CATALOG_QUERY, &[&schema, &table])
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?
+        .into_first_result()
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    if rows.is_empty() {
+        return Err(ConnectorError::QueryFailed(format!(
+            "no table {schema}.{table} found, or it has no columns"
+        )));
+    }
+
+    let mut columns = Vec::with_capacity(rows.len());
+    for row in rows {
+        let name: &str = row.get(0).unwrap_or_default();
+        let base_type: &str = row.get(1).unwrap_or_default();
+        let char_len: Option<i32> = row.get(2);
+        let precision: Option<u8> = row.get(3);
+        let scale: Option<i32> = row.get(4);
+        let datetime_precision: Option<i16> = row.get(5);
+        let is_nullable: &str = row.get(6).unwrap_or("YES");
+        let default: Option<&str> = row.get(7);
+        let ordinal: i32 = row.get(8).unwrap_or(0);
+
+        columns.push(ColumnDef {
+            name: name.to_string(),
+            data_type: render_declared_type(
+                base_type,
+                char_len,
+                precision.map(i32::from),
+                scale,
+                datetime_precision.map(i32::from),
+            ),
+            nullable: is_nullable.eq_ignore_ascii_case("YES"),
+            default: default.map(str::to_string),
+            ordinal: ordinal as u32,
+        });
+    }
+
+    Ok(TableCatalog { columns })
+}
+
+/// Reassemble a declared type from the parts INFORMATION_SCHEMA reports.
+///
+/// `varchar` with a length of 50 is `varchar(50)`, and a length of -1 is
+/// `varchar(max)`, SQL Server's encoding for an unbounded column. Without this
+/// every string column would compare as a bare `varchar` and a genuine
+/// widening would be invisible, which is the failure this module exists to fix.
+pub(crate) fn render_declared_type(
+    base: &str,
+    char_len: Option<i32>,
+    precision: Option<i32>,
+    scale: Option<i32>,
+    datetime_precision: Option<i32>,
+) -> String {
+    let base_lower = base.to_ascii_lowercase();
+
+    match base_lower.as_str() {
+        "char" | "varchar" | "nchar" | "nvarchar" | "binary" | "varbinary" => match char_len {
+            Some(-1) => format!("{base_lower}(max)"),
+            Some(len) => format!("{base_lower}({len})"),
+            None => base_lower,
+        },
+        "decimal" | "numeric" => match (precision, scale) {
+            (Some(p), Some(s)) => format!("{base_lower}({p},{s})"),
+            (Some(p), None) => format!("{base_lower}({p})"),
+            _ => base_lower,
+        },
+        "datetime2" | "time" | "datetimeoffset" => match datetime_precision {
+            Some(p) => format!("{base_lower}({p})"),
+            None => base_lower,
+        },
+        _ => base_lower,
+    }
+}
+
+/// Split a table reference into schema and table.
+///
+/// SQL Server resolves an unqualified name through the default schema, which
+/// is `dbo` unless it has been changed.
+pub(crate) fn split_table_reference(query: &str) -> Option<(String, String)> {
+    let trimmed = query.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("SELECT")
+        || upper.starts_with("WITH")
+        || upper.starts_with("EXEC")
+        || upper.starts_with("EXECUTE")
+    {
+        return None;
+    }
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+
+    let unquote = |part: &str| {
+        part.trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_matches('"')
+            .to_string()
+    };
+    match trimmed.split_once('.') {
+        Some((schema, table)) if !schema.is_empty() && !table.is_empty() => {
+            Some((unquote(schema), unquote(table)))
+        }
+        Some(_) => None,
+        None => Some(("dbo".to_string(), unquote(trimmed))),
+    }
+}
+
 /// Wrap bare table references in `SELECT * FROM <table>`.
 /// Full SELECT / WITH / EXEC statements are passed through unchanged.
 fn normalize_query(query: &str) -> String {
@@ -434,6 +607,74 @@ mod tests {
         // scale 0 means whole seconds.
         assert_eq!(time_micros(1, 0), 1_000_000);
         assert_eq!(time_micros(0, 7), 0);
+    }
+
+    #[test]
+    fn declared_types_are_reassembled_with_their_length() {
+        // A bare "varchar" would make a widening from 50 to 200 invisible.
+        assert_eq!(
+            render_declared_type("varchar", Some(50), None, None, None),
+            "varchar(50)"
+        );
+        assert_eq!(
+            render_declared_type("nvarchar", Some(200), None, None, None),
+            "nvarchar(200)"
+        );
+    }
+
+    #[test]
+    fn minus_one_length_means_max() {
+        // SQL Server encodes an unbounded column as a length of -1, which would
+        // otherwise render as "varchar(-1)".
+        assert_eq!(
+            render_declared_type("varchar", Some(-1), None, None, None),
+            "varchar(max)"
+        );
+        assert_eq!(
+            render_declared_type("varbinary", Some(-1), None, None, None),
+            "varbinary(max)"
+        );
+    }
+
+    #[test]
+    fn decimals_carry_precision_and_scale() {
+        assert_eq!(
+            render_declared_type("decimal", None, Some(12), Some(4), None),
+            "decimal(12,4)"
+        );
+    }
+
+    #[test]
+    fn temporal_types_carry_their_precision() {
+        assert_eq!(
+            render_declared_type("datetime2", None, None, None, Some(7)),
+            "datetime2(7)"
+        );
+    }
+
+    #[test]
+    fn types_without_parameters_stay_bare() {
+        assert_eq!(render_declared_type("int", None, None, None, None), "int");
+        assert_eq!(render_declared_type("BIGINT", None, None, None, None), "bigint");
+    }
+
+    #[test]
+    fn an_unqualified_name_resolves_through_dbo() {
+        assert_eq!(
+            split_table_reference("customers"),
+            Some(("dbo".to_string(), "customers".to_string()))
+        );
+        assert_eq!(
+            split_table_reference("[reporting].[orders]"),
+            Some(("reporting".to_string(), "orders".to_string()))
+        );
+    }
+
+    #[test]
+    fn statements_have_no_single_table_to_describe() {
+        for query in ["SELECT * FROM t", "EXEC sp_help"] {
+            assert_eq!(split_table_reference(query), None, "{query}");
+        }
     }
 
     #[test]

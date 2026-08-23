@@ -165,9 +165,51 @@ pub async fn read_catalog(config: &SourceConfig) -> crate::catalog::CatalogAvail
             )
             .await
         }
-        SourceConfig::Mysql { .. } => CatalogAvailability::UnsupportedEngine("MySQL"),
-        SourceConfig::SqlServer { .. } => CatalogAvailability::UnsupportedEngine("SQL Server"),
-        SourceConfig::Sqlite { .. } => CatalogAvailability::UnsupportedEngine("SQLite"),
+        SourceConfig::Mysql {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            mysql::read_catalog(
+                host,
+                port.unwrap_or(3306),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
+        }
+        SourceConfig::SqlServer {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            sqlserver::read_catalog(
+                host,
+                port.unwrap_or(1433),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
+        }
+        SourceConfig::Sqlite { path, query } => {
+            let path = path.clone();
+            let query = query.clone();
+            tokio::task::spawn_blocking(move || sqlite::read_catalog(&path, &query))
+                .await
+                .unwrap_or_else(|e| {
+                    CatalogAvailability::Failed(format!("task join error: {e}"))
+                })
+        }
     }
 }
 

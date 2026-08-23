@@ -1,4 +1,5 @@
 use super::ConnectorError;
+use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
 use mysql_async::{consts::ColumnType, prelude::*, Opts, OptsBuilder, Pool, Row, Value};
 use polars::prelude::*;
 
@@ -272,6 +273,112 @@ fn value_to_string(val: &Value) -> Option<String> {
     }
 }
 
+/// Read column metadata from `information_schema.COLUMNS`.
+///
+/// Returns [`CatalogAvailability`] rather than an error: a query that is not a
+/// table reference and a lookup that failed are different from a table with no
+/// columns, and the caller must be able to tell them apart.
+pub async fn read_catalog(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+    query: &str,
+) -> CatalogAvailability {
+    let Some((schema, table)) = split_table_reference(query, database) else {
+        return CatalogAvailability::QueryNotATable;
+    };
+
+    match load_catalog(host, port, database, username, password, &schema, &table).await {
+        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Err(err) => CatalogAvailability::Failed(err.to_string()),
+    }
+}
+
+async fn load_catalog(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+    schema: &str,
+    table: &str,
+) -> Result<TableCatalog, ConnectorError> {
+    let opts = OptsBuilder::default()
+        .ip_or_hostname(host)
+        .tcp_port(port)
+        .db_name(Some(database))
+        .user(Some(username))
+        .pass(Some(password));
+
+    let pool = Pool::new(Opts::from(opts));
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| ConnectorError::ConnectionFailed(e.to_string()))?;
+
+    // COLUMN_TYPE, not DATA_TYPE: the former is the declared type in full,
+    // "varchar(50)" or "int unsigned", where the latter is just "varchar" and
+    // would erase exactly the distinction this is here to find.
+    const CATALOG_QUERY: &str = "
+        SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, ORDINAL_POSITION
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        ORDER BY ORDINAL_POSITION";
+
+    let rows: Vec<(String, String, String, Option<String>, u32)> = conn
+        .exec(CATALOG_QUERY, (schema, table))
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    drop(conn);
+    pool.disconnect().await.ok();
+
+    if rows.is_empty() {
+        return Err(ConnectorError::QueryFailed(format!(
+            "no table {schema}.{table} found, or it has no columns"
+        )));
+    }
+
+    let columns = rows
+        .into_iter()
+        .map(|(name, data_type, is_nullable, default, ordinal)| ColumnDef {
+            name,
+            data_type,
+            nullable: is_nullable.eq_ignore_ascii_case("YES"),
+            default,
+            ordinal,
+        })
+        .collect();
+
+    Ok(TableCatalog { columns })
+}
+
+/// Split a table reference into schema and table.
+///
+/// MySQL calls the namespace a database, so an unqualified name resolves
+/// against the one the connection opened rather than a fixed default.
+pub(crate) fn split_table_reference(query: &str, database: &str) -> Option<(String, String)> {
+    let trimmed = query.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+        return None;
+    }
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+
+    let unquote = |part: &str| part.trim().trim_matches('`').trim_matches('"').to_string();
+    match trimmed.split_once('.') {
+        Some((schema, table)) if !schema.is_empty() && !table.is_empty() => {
+            Some((unquote(schema), unquote(table)))
+        }
+        Some(_) => None,
+        None => Some((database.to_string(), unquote(trimmed))),
+    }
+}
+
 /// Wrap a bare table/schema reference in `SELECT * FROM`.
 /// Full SELECT / WITH statements are passed through unchanged.
 fn normalize_query(query: &str) -> String {
@@ -429,6 +536,33 @@ mod tests {
         // An impossible date yields None rather than a wrong instant.
         assert_eq!(datetime_micros(&Value::Date(2024, 2, 30, 0, 0, 0, 0)), None);
         assert_eq!(datetime_micros(&Value::Int(5)), None);
+    }
+
+    #[test]
+    fn an_unqualified_name_resolves_against_the_connected_database() {
+        assert_eq!(
+            split_table_reference("customers", "shop"),
+            Some(("shop".to_string(), "customers".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_qualified_name_overrides_the_connected_database() {
+        assert_eq!(
+            split_table_reference("archive.customers", "shop"),
+            Some(("archive".to_string(), "customers".to_string()))
+        );
+        assert_eq!(
+            split_table_reference("`archive`.`customers`", "shop"),
+            Some(("archive".to_string(), "customers".to_string()))
+        );
+    }
+
+    #[test]
+    fn statements_have_no_single_table_to_describe() {
+        for query in ["SELECT * FROM t", "WITH x AS (SELECT 1) SELECT * FROM x"] {
+            assert_eq!(split_table_reference(query, "shop"), None, "{query}");
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use super::ConnectorError;
+use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
 use polars::prelude::*;
 use rusqlite::{types::ValueRef, Connection};
 
@@ -173,6 +174,105 @@ fn series_from_cells(name: &str, affinity: Affinity, cells: &[Cell]) -> Series {
     Series::new(name, values)
 }
 
+/// Read column metadata for a table via `pragma_table_info`.
+///
+/// Returns [`CatalogAvailability`] rather than an error: a query that is not a
+/// table reference and a lookup that failed are different from a table with no
+/// columns, and the caller must be able to tell them apart.
+pub fn read_catalog(path: &str, query: &str) -> CatalogAvailability {
+    let Some((schema, table)) = split_table_reference(query) else {
+        return CatalogAvailability::QueryNotATable;
+    };
+
+    match load_catalog(path, schema.as_deref(), &table) {
+        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Err(err) => CatalogAvailability::Failed(err.to_string()),
+    }
+}
+
+fn load_catalog(
+    path: &str,
+    schema: Option<&str>,
+    table: &str,
+) -> Result<TableCatalog, ConnectorError> {
+    let conn = Connection::open(path)
+        .map_err(|e| ConnectorError::ConnectionFailed(format!("Cannot open '{}': {}", path, e)))?;
+
+    // The table-valued form takes bound parameters, unlike `PRAGMA x(y)`, so
+    // the table name never has to be interpolated into SQL.
+    let sql = if schema.is_some() {
+        "SELECT cid, name, type, \"notnull\", dflt_value          FROM pragma_table_info(?1, ?2) ORDER BY cid"
+    } else {
+        "SELECT cid, name, type, \"notnull\", dflt_value          FROM pragma_table_info(?1) ORDER BY cid"
+    };
+
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<ColumnDef> {
+        let cid: i64 = row.get(0)?;
+        let declared: String = row.get(2)?;
+        let not_null: i64 = row.get(3)?;
+        Ok(ColumnDef {
+            name: row.get(1)?,
+            // SQLite keeps the declared type verbatim, including a length, and
+            // will happily store anything regardless. It is still what the
+            // schema says, which is what a comparison is about.
+            data_type: declared,
+            nullable: not_null == 0,
+            default: row.get::<_, Option<String>>(4)?,
+            // cid is 0-based; every other connector reports 1-based, and a
+            // mismatch would show as a spurious reordering on every column.
+            ordinal: (cid + 1) as u32,
+        })
+    };
+
+    let columns: Vec<ColumnDef> = match schema {
+        Some(schema) => stmt
+            .query_map(rusqlite::params![table, schema], map_row)
+            .and_then(|rows| rows.collect())
+            .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?,
+        None => stmt
+            .query_map(rusqlite::params![table], map_row)
+            .and_then(|rows| rows.collect())
+            .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?,
+    };
+
+    if columns.is_empty() {
+        return Err(ConnectorError::QueryFailed(format!(
+            "no table {table} found, or it has no columns"
+        )));
+    }
+
+    Ok(TableCatalog { columns })
+}
+
+/// Split a table reference into an optional schema and a table name.
+///
+/// SQLite qualifies by attached database rather than schema, so an unqualified
+/// name is left unqualified rather than defaulting to `main` — that is what
+/// `pragma_table_info` does on its own, across all attached databases.
+pub(crate) fn split_table_reference(query: &str) -> Option<(Option<String>, String)> {
+    let trimmed = query.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+        return None;
+    }
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+
+    let unquote = |part: &str| part.trim().trim_matches('"').trim_matches('`').to_string();
+    match trimmed.split_once('.') {
+        Some((schema, table)) if !schema.is_empty() && !table.is_empty() => {
+            Some((Some(unquote(schema)), unquote(table)))
+        }
+        Some(_) => None,
+        None => Some((None, unquote(trimmed))),
+    }
+}
+
 /// Wrap a bare table name in `SELECT * FROM <table>`.
 /// Full SELECT / WITH statements are passed through unchanged.
 fn normalize_query(query: &str) -> String {
@@ -282,6 +382,36 @@ mod tests {
             series_from_cells("s", Affinity::Text, &cells).dtype(),
             &DataType::String
         );
+    }
+
+    #[test]
+    fn an_unqualified_reference_stays_unqualified() {
+        assert_eq!(
+            split_table_reference("customers"),
+            Some((None, "customers".to_string()))
+        );
+    }
+
+    #[test]
+    fn an_attached_database_qualifier_is_kept() {
+        assert_eq!(
+            split_table_reference("archive.customers"),
+            Some((Some("archive".to_string()), "customers".to_string()))
+        );
+    }
+
+    #[test]
+    fn statements_have_no_single_table_to_describe() {
+        for query in ["SELECT * FROM t", "WITH x AS (SELECT 1) SELECT * FROM x", "SELECT 1;"] {
+            assert_eq!(split_table_reference(query), None, "{query}");
+        }
+    }
+
+    #[test]
+    fn malformed_references_are_refused() {
+        assert_eq!(split_table_reference(""), None);
+        assert_eq!(split_table_reference("schema."), None);
+        assert_eq!(split_table_reference(".table"), None);
     }
 
     #[test]
