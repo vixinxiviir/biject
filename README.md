@@ -7,6 +7,8 @@ A schema-aware data diff tool with both a Rust CLI and a Tauri desktop UI.
 > changed — see [MIGRATING.md](MIGRATING.md), which covers the one manual step
 > for saved connection profiles.
 
+Release notes are in [CHANGELOG.md](CHANGELOG.md).
+
 Compare schemas for breaking changes, find modified rows with configurable tolerance, and review differences through either scripted CLI workflows or an interactive desktop app.
 
 The project currently ships in two forms:

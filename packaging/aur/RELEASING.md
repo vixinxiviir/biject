@@ -86,6 +86,9 @@ already exist and be complete.
    | `tauri-app/src-tauri/tauri.conf.json` | `version` |
    | `packaging/aur/PKGBUILD` | `pkgver` |
 
+   Also move the CHANGELOG's `[Unreleased]` heading to the new version with
+   today's date, and update the comparison link at the foot of the file.
+
    **Then regenerate both lockfiles and commit them.** The Tauri app depends on
    the CLI crate by path, so bumping the CLI version leaves
    `tauri-app/src-tauri/Cargo.lock` recording the old one. CI checks each crate
