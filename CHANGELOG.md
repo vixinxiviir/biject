@@ -8,7 +8,7 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ---
 
-## [0.5.0] — unreleased
+## [0.5.0] — 2026-08-24
 
 Schema comparison now reads the database's own catalog, so it reports what a
 DataFrame cannot show: declared types, nullability, and defaults.
@@ -136,7 +136,7 @@ First tagged release, as `datadiff`. Schema comparison, keyed row diffs, batch
 manifests, schema policies, and a Tauri desktop app with connectors for SQL
 Server, PostgreSQL, MySQL/MariaDB and SQLite.
 
-[0.5.0]: https://github.com/vixinxiviir/biject/compare/v0.4.0...HEAD
+[0.5.0]: https://github.com/vixinxiviir/biject/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vixinxiviir/biject/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vixinxiviir/biject/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/vixinxiviir/biject/compare/v0.2.1...v0.2.2
