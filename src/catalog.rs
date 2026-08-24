@@ -72,10 +72,13 @@ pub enum CatalogAvailability {
     QueryNotATable,
     /// The source is a database and the query names a table, but reading the
     /// catalog failed. Carries the reason; never silently treated as absent.
-    Failed(String),
+    ///
+    /// A struct variant, not a newtype: serde cannot serialise a tagged newtype
+    /// variant holding a plain string, and this enum is internally tagged.
+    Failed { reason: String },
     /// This connector cannot read catalogs yet. Distinct from a failure: the
     /// lookup was never attempted because the code does not exist.
-    UnsupportedEngine(&'static str),
+    UnsupportedEngine { engine: String },
     /// The caller did not ask for metadata. Distinct from every other variant:
     /// nothing was wrong, nothing was tried.
     NotRequested,
@@ -105,10 +108,10 @@ impl CatalogAvailability {
                  single table to describe"
                     .to_string(),
             ),
-            CatalogAvailability::Failed(reason) => {
+            CatalogAvailability::Failed { reason } => {
                 Some(format!("reading the catalog failed: {reason}"))
             }
-            CatalogAvailability::UnsupportedEngine(engine) => Some(format!(
+            CatalogAvailability::UnsupportedEngine { engine } => Some(format!(
                 "{engine} catalog reading is not implemented yet"
             )),
             CatalogAvailability::NotRequested => {
@@ -591,6 +594,25 @@ mod tests {
         assert_eq!(widened.to_string(), "name: varchar(50) -> varchar(200) (widening)");
     }
 
+
+    #[test]
+    fn every_availability_variant_serialises() {
+        // Internally-tagged enums cannot serialise newtype variants holding a
+        // plain string. If that is what these are, the JSON export panics the
+        // first time a catalog read fails in the field.
+        for availability in [
+            CatalogAvailability::Available(TableCatalog::default()),
+            CatalogAvailability::NotADatabase,
+            CatalogAvailability::QueryNotATable,
+            CatalogAvailability::Failed { reason: "permission denied".into() },
+            CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() },
+            CatalogAvailability::NotRequested,
+        ] {
+            let json = serde_json::to_string(&availability);
+            assert!(json.is_ok(), "{availability:?} did not serialise: {:?}", json.err());
+        }
+    }
+
     // ---- availability ----
 
     #[test]
@@ -605,7 +627,7 @@ mod tests {
             .explain()
             .unwrap()
             .contains("SELECT"));
-        assert!(CatalogAvailability::Failed("permission denied".into())
+        assert!(CatalogAvailability::Failed { reason: "permission denied".into() }
             .explain()
             .unwrap()
             .contains("permission denied"));
@@ -627,8 +649,8 @@ mod tests {
         let reasons = [
             CatalogAvailability::NotADatabase,
             CatalogAvailability::QueryNotATable,
-            CatalogAvailability::Failed("timeout".into()),
-            CatalogAvailability::UnsupportedEngine("MySQL"),
+            CatalogAvailability::Failed { reason: "timeout".into() },
+            CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() },
             CatalogAvailability::NotRequested,
         ];
         let explanations: Vec<String> =
@@ -641,7 +663,7 @@ mod tests {
 
     #[test]
     fn an_unimplemented_connector_names_itself() {
-        let reason = CatalogAvailability::UnsupportedEngine("MySQL")
+        let reason = CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() }
             .explain()
             .unwrap();
         assert!(reason.contains("MySQL"), "{reason}");
@@ -650,7 +672,7 @@ mod tests {
 
     #[test]
     fn a_failure_is_never_mistaken_for_an_absent_catalog() {
-        let failed = CatalogAvailability::Failed("timeout".into());
+        let failed = CatalogAvailability::Failed { reason: "timeout".into() };
         assert!(!failed.is_available());
         assert!(failed.catalog().is_none());
         assert!(failed.explain().is_some(), "the reason must survive");

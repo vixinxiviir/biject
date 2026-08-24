@@ -746,6 +746,19 @@
       </table>
     </section>
 
+    <section id="s-section-metadata" style="display:none">
+      <h3>Column Metadata</h3>
+      <table>
+        <thead><tr><th>Column</th><th>Change</th><th>Impact</th></tr></thead>
+        <tbody id="s-metadata-body"></tbody>
+      </table>
+    </section>
+
+    <section id="s-section-metadata-gap" style="display:none">
+      <h3>Column Metadata Not Compared</h3>
+      <ul id="s-metadata-gap-list"></ul>
+    </section>
+
     <section id="s-section-renames" style="display:none">
       <h3>Possible Renames</h3>
       <table>
@@ -1203,6 +1216,39 @@
       return 'impact-breaking';
     }
 
+    // Mirrors the wording the CLI uses, so a report reads the same either way.
+    function describeMetadataChange(m) {
+      switch (m.kind) {
+        case 'native_type':
+          return `${m.from} &rarr; ${m.to}`;
+        case 'nullability':
+          return m.now_nullable ? 'NOT NULL dropped' : 'NOT NULL added';
+        case 'default':
+          return `default ${m.from === null ? 'none' : m.from} &rarr; ${m.to === null ? 'none' : m.to}`;
+        case 'ordinal':
+          return `position ${m.from} &rarr; ${m.to}`;
+        default:
+          return m.kind;
+      }
+    }
+
+    function explainCatalog(availability) {
+      switch (availability.status) {
+        case 'not_a_database':
+          return 'file sources have no catalog to read';
+        case 'query_not_a_table':
+          return 'the query is a SELECT rather than a table reference';
+        case 'failed':
+          return `reading the catalog failed: ${availability.reason || ''}`;
+        case 'unsupported_engine':
+          return `${availability.engine || 'this engine'} catalog reading is not implemented yet`;
+        case 'not_requested':
+          return 'metadata was not requested';
+        default:
+          return availability.status;
+      }
+    }
+
     function renderSchemaResults(data) {
       document.getElementById('s-stat-added').textContent   = data.added.length;
       document.getElementById('s-stat-removed').textContent = data.removed.length;
@@ -1224,6 +1270,36 @@
          <td class="${impactClass(t.impact)}">${t.impact}</td></tr>`
       ).join('');
       document.getElementById('s-section-types').style.display = data.type_changes.length ? '' : 'none';
+
+      // Metadata comes from the database catalog. An empty list means nothing
+      // differed only when both sides were read; otherwise it means nothing was
+      // examined, and the gap section says which and why.
+      const metadata = data.metadata || { changes: [], source: {}, target: {} };
+      const bothRead = metadata.source.status === 'available'
+                    && metadata.target.status === 'available';
+
+      const metadataBody = document.getElementById('s-metadata-body');
+      metadataBody.innerHTML = (metadata.changes || []).map(m => {
+        const impact = m.kind === 'native_type' ? (m.impact || 'unknown')
+                     : m.kind.replace('_', ' ');
+        const breaking = (m.kind === 'native_type' && m.impact !== 'widening')
+                      || (m.kind === 'nullability' && m.now_nullable);
+        return `<tr><td>${m.column}</td><td>${describeMetadataChange(m)}</td>
+                <td class="${breaking ? 'impact-breaking' : 'impact-safe'}">${impact}</td></tr>`;
+      }).join('');
+      document.getElementById('s-section-metadata').style.display =
+        (bothRead && (metadata.changes || []).length) ? '' : 'none';
+
+      const gaps = [];
+      if (metadata.source.status && metadata.source.status !== 'available') {
+        gaps.push(`Source: ${explainCatalog(metadata.source)}`);
+      }
+      if (metadata.target.status && metadata.target.status !== 'available') {
+        gaps.push(`Target: ${explainCatalog(metadata.target)}`);
+      }
+      const gapList = document.getElementById('s-metadata-gap-list');
+      gapList.innerHTML = gaps.map(g => `<li>${g}</li>`).join('');
+      document.getElementById('s-section-metadata-gap').style.display = gaps.length ? '' : 'none';
 
       const renamesBody = document.getElementById('s-renames-body');
       renamesBody.innerHTML = data.rename_suggestions.map(r =>

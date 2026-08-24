@@ -152,6 +152,29 @@ struct AllowedTypeChange {
 }
 
 /// Returns structured schema diff data from pre-loaded DataFrames. Used by the GUI when sources are SQL Server or other connectors.
+/// Compare two frames, supplying catalog metadata read from their sources.
+///
+/// For embedders that hold connection details and can read a catalog. The
+/// frames-only form reports `NotRequested`, which is honest but means a caller
+/// able to do better silently does not.
+pub fn run_schema_diff_frames_with_catalog(
+    df1: DataFrame,
+    df2: DataFrame,
+    source_label: &str,
+    target_label: &str,
+    source_catalog: CatalogAvailability,
+    target_catalog: CatalogAvailability,
+) -> Result<SchemaDiffResult, SchemaDiffError> {
+    run_schema_diff_inner(
+        &df1,
+        &df2,
+        source_label,
+        target_label,
+        None,
+        Some((source_catalog, target_catalog)),
+    )
+}
+
 pub fn run_schema_diff_frames(df1: DataFrame, df2: DataFrame, source_label: &str, target_label: &str) -> Result<SchemaDiffResult, SchemaDiffError> {
     run_schema_diff_inner(&df1, &df2, source_label, target_label, None, None)
 }
@@ -934,7 +957,7 @@ mod export_tests {
         // terminal report and JSON both avoid that ambiguity; CSV must too.
         let rows = schema_csv_rows(&result_with(MetadataReport {
             source: CatalogAvailability::NotADatabase,
-            target: CatalogAvailability::UnsupportedEngine("MySQL"),
+            target: CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() },
             changes: vec![],
         }));
 

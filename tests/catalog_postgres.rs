@@ -227,6 +227,6 @@ fn a_missing_table_fails_loudly_rather_than_looking_empty() {
     // An empty catalog and a table that does not exist must not look alike.
     let availability = runtime().block_on(read(&dsn(), "no_such_table"));
 
-    assert!(matches!(availability, CatalogAvailability::Failed(_)), "{availability:?}");
+    assert!(matches!(availability, CatalogAvailability::Failed { reason: _ }), "{availability:?}");
     assert!(availability.explain().unwrap().contains("no_such_table"));
 }

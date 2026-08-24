@@ -292,7 +292,7 @@ pub async fn read_catalog(
 
     match load_catalog(host, port, database, username, password, &schema, &table).await {
         Ok(catalog) => CatalogAvailability::Available(catalog),
-        Err(err) => CatalogAvailability::Failed(err.to_string()),
+        Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
     }
 }
 

@@ -70,8 +70,20 @@ async fn run_schema_diff(
     let df2 = biject::connectors::load_source(&source2)
         .await
         .map_err(|e| e.to_string())?;
-    biject::schema::run_schema_diff_frames(df1, df2, &label1, &label2)
-        .map_err(|e| e.to_string())
+    // The desktop app holds connection details, so it can read catalogs and
+    // show declared types, nullability and defaults just as the CLI does.
+    let source_catalog = biject::connectors::read_catalog(&source1).await;
+    let target_catalog = biject::connectors::read_catalog(&source2).await;
+
+    biject::schema::run_schema_diff_frames_with_catalog(
+        df1,
+        df2,
+        &label1,
+        &label2,
+        source_catalog,
+        target_catalog,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

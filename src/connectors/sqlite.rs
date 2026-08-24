@@ -186,7 +186,7 @@ pub fn read_catalog(path: &str, query: &str) -> CatalogAvailability {
 
     match load_catalog(path, schema.as_deref(), &table) {
         Ok(catalog) => CatalogAvailability::Available(catalog),
-        Err(err) => CatalogAvailability::Failed(err.to_string()),
+        Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
     }
 }
 

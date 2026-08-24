@@ -207,7 +207,7 @@ pub async fn read_catalog(config: &SourceConfig) -> crate::catalog::CatalogAvail
             tokio::task::spawn_blocking(move || sqlite::read_catalog(&path, &query))
                 .await
                 .unwrap_or_else(|e| {
-                    CatalogAvailability::Failed(format!("task join error: {e}"))
+                    CatalogAvailability::Failed { reason: format!("task join error: {e}") }
                 })
         }
     }
