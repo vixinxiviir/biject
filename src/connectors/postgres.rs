@@ -247,7 +247,10 @@ pub async fn read_catalog(
     };
 
     match load_catalog(host, port, database, username, password, &schema, &table).await {
-        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Ok(Some(catalog)) => CatalogAvailability::Available(catalog),
+        Ok(None) => CatalogAvailability::TableNotFound {
+            table: format!("{schema}.{table}"),
+        },
         Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
     }
 }
@@ -260,7 +263,7 @@ async fn load_catalog(
     password: &str,
     schema: &str,
     table: &str,
-) -> Result<TableCatalog, ConnectorError> {
+) -> Result<Option<TableCatalog>, ConnectorError> {
     let connect_str = format!(
         "host={} port={} dbname={} user={} password={}",
         host, port, database, username, password
@@ -300,9 +303,7 @@ async fn load_catalog(
         .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
 
     if rows.is_empty() {
-        return Err(ConnectorError::QueryFailed(format!(
-            "no table {schema}.{table} found, or it has no visible columns"
-        )));
+        return Ok(None);
     }
 
     let columns = rows
@@ -416,9 +417,11 @@ async fn load_catalog(
         })
         .collect();
 
-    Ok(TableCatalog::new(columns)
-        .with_constraints(constraints)
-        .with_indexes(indexes))
+    Ok(Some(
+        TableCatalog::new(columns)
+            .with_constraints(constraints)
+            .with_indexes(indexes),
+    ))
 }
 
 /// Split a bare table reference into schema and table.

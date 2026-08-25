@@ -256,11 +256,17 @@ fn a_select_reports_that_there_is_no_table_to_describe() {
 
 #[test]
 #[ignore = "needs a live PostgreSQL"]
-fn a_missing_table_fails_loudly_rather_than_looking_empty() {
-    // An empty catalog and a table that does not exist must not look alike.
+fn a_missing_table_is_reported_as_missing_not_as_a_failure() {
+    // Three things that must not look alike: a table with no columns, a table
+    // that is not there, and a lookup that went wrong. The middle one is both
+    // what a typo looks like and what a table you have not created yet looks
+    // like, so it gets its own answer rather than being folded into `Failed`.
     let availability = runtime().block_on(read(&dsn(), "no_such_table"));
 
-    assert!(matches!(availability, CatalogAvailability::Failed { reason: _ }), "{availability:?}");
+    assert!(
+        matches!(availability, CatalogAvailability::TableNotFound { .. }),
+        "{availability:?}"
+    );
     assert!(availability.explain().unwrap().contains("no_such_table"));
 }
 

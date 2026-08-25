@@ -29,6 +29,11 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ### Changed
 
+- **Breaking:** a table the database does not have is now
+  `CatalogAvailability::TableNotFound` rather than `Failed`. A table that is
+  not there is an ordinary, actionable answer — it is what a typo looks like,
+  and also what a table you have yet to create looks like — and a caller has
+  to be able to tell it from a lookup that went wrong.
 - **Breaking:** `TableCatalog` is `#[non_exhaustive]` and carries
   `constraints`, `indexes` and `unread`. Build one with `TableCatalog::new`
   and the `with_` methods rather than a struct literal.

@@ -368,7 +368,10 @@ pub async fn read_catalog(
     };
 
     match load_catalog(host, port, database, username, password, &schema, &table).await {
-        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Ok(Some(catalog)) => CatalogAvailability::Available(catalog),
+        Ok(None) => CatalogAvailability::TableNotFound {
+            table: format!("{schema}.{table}"),
+        },
         Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
     }
 }
@@ -381,7 +384,7 @@ async fn load_catalog(
     password: &str,
     schema: &str,
     table: &str,
-) -> Result<TableCatalog, ConnectorError> {
+) -> Result<Option<TableCatalog>, ConnectorError> {
     let mut config = Config::new();
     config.host(host);
     config.port(port);
@@ -419,9 +422,7 @@ async fn load_catalog(
         .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
 
     if rows.is_empty() {
-        return Err(ConnectorError::QueryFailed(format!(
-            "no table {schema}.{table} found, or it has no columns"
-        )));
+        return Ok(None);
     }
 
     let mut columns = Vec::with_capacity(rows.len());
@@ -558,9 +559,11 @@ async fn load_catalog(
         });
     }
 
-    Ok(TableCatalog::new(columns)
-        .with_constraints(constraints)
-        .with_indexes(indexes))
+    Ok(Some(
+        TableCatalog::new(columns)
+            .with_constraints(constraints)
+            .with_indexes(indexes),
+    ))
 }
 
 /// Reassemble a declared type from the parts INFORMATION_SCHEMA reports.

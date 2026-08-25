@@ -277,6 +277,14 @@ pub enum CatalogAvailability {
     /// The source is a database, but the query is a `SELECT` rather than a
     /// table reference, so there is no single table to describe.
     QueryNotATable,
+    /// The query names a table the database does not have.
+    ///
+    /// Distinct from `Failed`, which covers a lookup that went wrong. A table
+    /// that is simply not there is an ordinary, actionable answer — it is what
+    /// a typo looks like, and it is also what a table you have not created yet
+    /// looks like — and a caller has to be able to tell the two apart from a
+    /// connection that dropped.
+    TableNotFound { table: String },
     /// The source is a database and the query names a table, but reading the
     /// catalog failed. Carries the reason; never silently treated as absent.
     ///
@@ -315,6 +323,9 @@ impl CatalogAvailability {
                  single table to describe"
                     .to_string(),
             ),
+            CatalogAvailability::TableNotFound { table } => {
+                Some(format!("there is no table named {table}"))
+            }
             CatalogAvailability::Failed { reason } => {
                 Some(format!("reading the catalog failed: {reason}"))
             }

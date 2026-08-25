@@ -292,7 +292,10 @@ pub async fn read_catalog(
     };
 
     match load_catalog(host, port, database, username, password, &schema, &table).await {
-        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Ok(Some(catalog)) => CatalogAvailability::Available(catalog),
+        Ok(None) => CatalogAvailability::TableNotFound {
+            table: format!("{schema}.{table}"),
+        },
         Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
     }
 }
@@ -305,7 +308,7 @@ async fn load_catalog(
     password: &str,
     schema: &str,
     table: &str,
-) -> Result<TableCatalog, ConnectorError> {
+) -> Result<Option<TableCatalog>, ConnectorError> {
     let opts = OptsBuilder::default()
         .ip_or_hostname(host)
         .tcp_port(port)
@@ -336,9 +339,7 @@ async fn load_catalog(
     if rows.is_empty() {
         drop(conn);
         pool.disconnect().await.ok();
-        return Err(ConnectorError::QueryFailed(format!(
-            "no table {schema}.{table} found, or it has no columns"
-        )));
+        return Ok(None);
     }
 
     // Keys and unique constraints. Foreign keys are excluded deliberately: see
@@ -475,10 +476,12 @@ async fn load_catalog(
         })
         .collect();
 
-    Ok(TableCatalog::new(columns)
-        .with_constraints(constraints)
-        .with_indexes(indexes)
-        .with_unread(unread))
+    Ok(Some(
+        TableCatalog::new(columns)
+            .with_constraints(constraints)
+            .with_indexes(indexes)
+            .with_unread(unread),
+    ))
 }
 
 /// Split a table reference into schema and table.

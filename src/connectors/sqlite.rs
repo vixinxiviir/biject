@@ -190,7 +190,10 @@ pub fn read_catalog(path: &str, query: &str) -> CatalogAvailability {
     };
 
     match load_catalog(path, schema.as_deref(), &table) {
-        Ok(catalog) => CatalogAvailability::Available(catalog),
+        Ok(Some(catalog)) => CatalogAvailability::Available(catalog),
+        Ok(None) => CatalogAvailability::TableNotFound {
+            table: table.clone(),
+        },
         Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
     }
 }
@@ -199,7 +202,7 @@ fn load_catalog(
     path: &str,
     schema: Option<&str>,
     table: &str,
-) -> Result<TableCatalog, ConnectorError> {
+) -> Result<Option<TableCatalog>, ConnectorError> {
     let conn = Connection::open(path)
         .map_err(|e| ConnectorError::ConnectionFailed(format!("Cannot open '{}': {}", path, e)))?;
 
@@ -248,9 +251,7 @@ fn load_catalog(
     };
 
     if with_key_positions.is_empty() {
-        return Err(ConnectorError::QueryFailed(format!(
-            "no table {table} found, or it has no columns"
-        )));
+        return Ok(None);
     }
 
     // The primary key comes from `table_info`, not from `index_list`. A rowid
@@ -364,10 +365,12 @@ fn load_catalog(
     // in the original CREATE TABLE text in `sqlite_master`, and recovering them
     // means parsing SQL. Declared unread so their absence is never read as
     // evidence that the table has none.
-    Ok(TableCatalog::new(columns)
-        .with_constraints(constraints)
-        .with_indexes(indexes)
-        .with_unread(vec![ConstraintKind::Check]))
+    Ok(Some(
+        TableCatalog::new(columns)
+            .with_constraints(constraints)
+            .with_indexes(indexes)
+            .with_unread(vec![ConstraintKind::Check]),
+    ))
 }
 
 /// Split a table reference into an optional schema and a table name.
