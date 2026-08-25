@@ -59,10 +59,9 @@ pub async fn load_async(
     drop(conn);
     pool.disconnect().await.ok();
 
-    if rows.is_empty() {
-        return Ok(DataFrame::empty());
-    }
-
+    // No early return for an empty result. The column types were captured
+    // above and still describe the table; discarding them would make an empty
+    // table look like a table with no columns.
     let mut cells: Vec<Vec<Value>> = vec![Vec::with_capacity(rows.len()); col_count];
     for mut row in rows {
         for (i, column) in cells.iter_mut().enumerate() {

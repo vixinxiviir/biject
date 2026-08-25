@@ -51,6 +51,9 @@ anyhow = "1"
 prettytable = "0.10.0"
 chrono = "0.4"
 tiberius = { version = "0.12", features = ["tds73"] }
+# Driving tiberius' query stream far enough to read its column metadata, which
+# is the only way to learn a result set's shape when it returns no rows.
+futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "net", "rt-multi-thread"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }

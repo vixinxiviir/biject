@@ -37,16 +37,21 @@ pub async fn load_async(
 
     let sql = normalize_query(query);
 
-    let rows = client
-        .query(sql.as_str(), &[])
+    // Prepared rather than run directly so the column description is available
+    // whether or not any rows come back. Reading the columns from `rows[0]`
+    // meant an empty table produced a frame with no columns at all, and a
+    // schema comparison against one reported every column as removed.
+    let statement = client
+        .prepare(sql.as_str())
         .await
         .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
 
-    if rows.is_empty() {
-        return Ok(DataFrame::empty());
-    }
+    let rows = client
+        .query(&statement, &[])
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
 
-    let columns: Vec<(String, Type)> = rows[0]
+    let columns: Vec<(String, Type)> = statement
         .columns()
         .iter()
         .map(|c| (c.name().to_string(), c.type_().clone()))

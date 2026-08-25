@@ -8,6 +8,22 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A table with no rows was read as a table with no columns.** Every
+  connector took the column list from the first row returned, so an empty
+  result set produced a frame with nothing in it. Comparing anything against
+  an empty table therefore reported every column as removed and the change as
+  breaking — a confident, completely wrong answer, and the exact failure this
+  project keeps hunting. PostgreSQL now takes the description from the
+  prepared statement, SQL Server from its result-set metadata, and MySQL and
+  SQLite keep the column list they had already read. Verified against a live
+  server on all four.
+
+---
+
 ## [0.5.0] — 2026-08-24
 
 Schema comparison now reads the database's own catalog, so it reports what a
@@ -136,6 +152,7 @@ First tagged release, as `datadiff`. Schema comparison, keyed row diffs, batch
 manifests, schema policies, and a Tauri desktop app with connectors for SQL
 Server, PostgreSQL, MySQL/MariaDB and SQLite.
 
+[Unreleased]: https://github.com/vixinxiviir/biject/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/vixinxiviir/biject/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vixinxiviir/biject/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vixinxiviir/biject/compare/v0.2.2...v0.3.0

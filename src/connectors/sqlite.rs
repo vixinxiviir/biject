@@ -59,7 +59,10 @@ pub fn load(path: &str, query: &str) -> Result<DataFrame, ConnectorError> {
         }
     }
 
-    if col_count == 0 || cells[0].is_empty() {
+    // Only a genuinely column-less statement yields an empty frame. Having no
+    // rows is not the same thing, and treating it as such made an empty table
+    // compare as though every column had been dropped.
+    if col_count == 0 {
         return Ok(DataFrame::empty());
     }
 
@@ -288,6 +291,67 @@ fn normalize_query(query: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real SQLite file, since these paths are about what the driver does.
+    fn scratch_db(name: &str, ddl: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("biject_sqlite_{name}.sqlite"));
+        let _ = std::fs::remove_file(&path);
+        let connection = rusqlite::Connection::open(&path).expect("create the database");
+        connection.execute_batch(ddl).expect("run the fixture DDL");
+        path
+    }
+
+    #[test]
+    fn a_table_with_no_rows_still_reports_its_columns() {
+        // Having no rows is not the same as having no columns. Bailing out on
+        // an empty result set returned a frame with neither, so a schema
+        // comparison against an empty table reported every column as removed
+        // and called the change breaking.
+        let path = scratch_db(
+            "empty",
+            "CREATE TABLE empties (id INTEGER NOT NULL, name TEXT, amount REAL);",
+        );
+
+        let frame = load(path.to_str().unwrap(), "empties").expect("load an empty table");
+
+        assert_eq!(frame.height(), 0, "there really are no rows");
+        assert_eq!(
+            frame.get_column_names(),
+            vec!["id", "name", "amount"],
+            "but every column is still described"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn an_empty_table_compares_equal_to_a_populated_one_of_the_same_shape() {
+        // The user-visible consequence, through the real comparison.
+        let path = scratch_db(
+            "empty_compare",
+            "CREATE TABLE filled (id INTEGER NOT NULL, name TEXT);
+             CREATE TABLE empties (id INTEGER NOT NULL, name TEXT);
+             INSERT INTO filled (id, name) VALUES (1, 'a');",
+        );
+        let file = path.to_str().unwrap();
+
+        let diff = crate::schema::run_schema_diff_frames(
+            load(file, "filled").expect("load"),
+            load(file, "empties").expect("load"),
+            "filled",
+            "empties",
+        )
+        .expect("compare");
+
+        assert!(diff.added.is_empty(), "spurious additions: {:?}", diff.added);
+        assert!(
+            diff.removed.is_empty(),
+            "an empty table is not a table missing every column: {:?}",
+            diff.removed
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn affinity_follows_sqlites_own_rules() {

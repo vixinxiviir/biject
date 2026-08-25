@@ -1,7 +1,8 @@
 use super::ConnectorError;
 use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
+use futures_util::TryStreamExt;
 use polars::prelude::*;
-use tiberius::{AuthMethod, Client, ColumnData, ColumnType, Config};
+use tiberius::{AuthMethod, Client, ColumnData, ColumnType, Config, QueryItem, Row};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -43,25 +44,46 @@ pub async fn load_async(
 
     let sql = normalize_query(query);
 
-    let rows = client
+    // Walked as a stream rather than collected with `into_first_result`, so the
+    // column metadata can be taken from the stream itself. It arrives ahead of
+    // the rows, and it arrives even when there are none. Reading the columns
+    // from `rows[0]` meant an empty table produced a frame with no columns at
+    // all, and a schema comparison against one reported every column as
+    // removed rather than reporting no difference.
+    let mut stream = client
         .simple_query(sql.as_str())
-        .await
-        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?
-        .into_first_result()
         .await
         .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
 
-    if rows.is_empty() {
-        return Ok(DataFrame::empty());
+    let mut declared: Vec<(String, ColumnType)> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
+
+    while let Some(item) = stream
+        .try_next()
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?
+    {
+        match item {
+            QueryItem::Metadata(metadata) => {
+                // Only the first result set is used, which is what
+                // `into_first_result` did.
+                if metadata.result_index() > 0 {
+                    break;
+                }
+                declared = metadata
+                    .columns()
+                    .iter()
+                    .map(|c| (c.name().to_string(), c.column_type()))
+                    .collect();
+            }
+            QueryItem::Row(row) => rows.push(row),
+        }
     }
 
-    // Capture names and declared types before the rows are consumed.
-    let declared: Vec<(String, ColumnType)> = rows[0]
-        .columns()
-        .iter()
-        .map(|c| (c.name().to_string(), c.column_type()))
-        .collect();
     let col_count = declared.len();
+    if col_count == 0 {
+        return Ok(DataFrame::empty());
+    }
 
     let mut cells: Vec<Vec<ColumnData<'static>>> = vec![Vec::with_capacity(rows.len()); col_count];
     for row in rows {

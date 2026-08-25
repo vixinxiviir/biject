@@ -86,9 +86,18 @@ fn create_fixtures(dsn: &str) {
 
     const DDL: &str = "
         DROP TABLE IF EXISTS dev;
+        DROP TABLE IF EXISTS empties;
         DROP SCHEMA IF EXISTS reporting CASCADE;
 
         CREATE TABLE dev (
+          id BIGINT NOT NULL,
+          name VARCHAR(50),
+          note TEXT NOT NULL DEFAULT '',
+          amount NUMERIC(12,4) NOT NULL,
+          created TIMESTAMPTZ DEFAULT now()
+        );
+
+        CREATE TABLE empties (
           id BIGINT NOT NULL,
           name VARCHAR(50),
           note TEXT NOT NULL DEFAULT '',
@@ -229,4 +238,58 @@ fn a_missing_table_fails_loudly_rather_than_looking_empty() {
 
     assert!(matches!(availability, CatalogAvailability::Failed { reason: _ }), "{availability:?}");
     assert!(availability.explain().unwrap().contains("no_such_table"));
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn a_table_with_no_rows_still_reports_its_columns() {
+    // `dev` and `empties` are declared identically; `empties` just has no rows
+    // in it. Loading a result set used to take the column list from the first
+    // row, so an empty table produced a frame with no columns at all — and a
+    // schema comparison against one reported every column as removed and the
+    // change as breaking. An empty table is not a table without columns.
+    let dsn = dsn();
+    setup(&dsn);
+
+    let config = parse_source_uri(&dsn, Some("empties")).expect("valid dsn");
+    let frame = runtime()
+        .block_on(biject::connectors::load_source(&config))
+        .expect("load an empty table");
+
+    assert_eq!(frame.height(), 0, "there really are no rows");
+    assert_eq!(
+        frame.get_column_names(),
+        vec!["id", "name", "note", "amount", "created"],
+        "but every column is still described"
+    );
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn comparing_against_an_empty_table_finds_no_differences() {
+    // The user-visible consequence of the above, through the real command.
+    let dsn = dsn();
+    setup(&dsn);
+
+    let load = |table: &str| {
+        let config = parse_source_uri(&dsn, Some(table)).expect("valid dsn");
+        runtime()
+            .block_on(biject::connectors::load_source(&config))
+            .expect("load")
+    };
+
+    let diff = biject::schema::run_schema_diff_frames(load("dev"), load("empties"), "dev", "empties")
+        .expect("compare");
+
+    assert!(diff.added.is_empty(), "spurious additions: {:?}", diff.added);
+    assert!(
+        diff.removed.is_empty(),
+        "an empty table is not a table missing every column: {:?}",
+        diff.removed
+    );
+    assert!(
+        diff.type_changes.is_empty(),
+        "spurious type changes: {:?}",
+        diff.type_changes
+    );
 }

@@ -271,6 +271,7 @@ dependencies = [
  "colored",
  "csv",
  "dirs",
+ "futures-util",
  "keyring",
  "mysql_async",
  "polars",
