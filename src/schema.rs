@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use crate::catalog::{self, CatalogAvailability, MetadataChange};
+use crate::catalog::{self, CatalogAvailability, ConstraintKind, MetadataChange};
 use crate::connectors;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -132,6 +132,25 @@ impl MetadataReport {
             gaps.push(("target", reason));
         }
         gaps
+    }
+
+    /// Kinds of rule that were not compared because a connector cannot read
+    /// them, with the side that could not.
+    ///
+    /// Separate from `gaps`, which is about a catalog being absent entirely.
+    /// Here the catalog was read and is simply incomplete, and the difference
+    /// matters: an empty list of check constraints means "none" on PostgreSQL
+    /// and "not looked at" on SQLite.
+    pub fn unread_constraints(&self) -> Vec<(&'static str, ConstraintKind)> {
+        let mut unread = Vec::new();
+        for (side, availability) in [("source", &self.source), ("target", &self.target)] {
+            if let Some(catalog) = availability.catalog() {
+                for kind in &catalog.unread {
+                    unread.push((side, *kind));
+                }
+            }
+        }
+        unread
     }
 }
 
@@ -405,7 +424,7 @@ fn schema_csv_rows(result: &SchemaDiffResult) -> Vec<String> {
     for change in &result.metadata.changes {
         rows.push(row(
             "metadata_change",
-            change.column(),
+            change.subject(),
             &change.to_string(),
             "",
             "",
@@ -414,6 +433,16 @@ fn schema_csv_rows(result: &SchemaDiffResult) -> Vec<String> {
     }
     for (side, reason) in result.metadata.gaps() {
         rows.push(row("metadata_not_compared", side, &reason, "", "", false));
+    }
+    for (side, kind) in result.metadata.unread_constraints() {
+        rows.push(row(
+            "constraints_not_compared",
+            side,
+            &format!("{kind} cannot be read from this source"),
+            "",
+            "",
+            false,
+        ));
     }
     for rename in &result.rename_suggestions {
         rows.push(row(
@@ -508,20 +537,33 @@ fn render_schema_report(result: &SchemaDiffResult, policy_path: Option<&str>) {
 fn render_metadata(metadata: &MetadataReport) {
     if metadata.is_complete() {
         if metadata.changes.is_empty() {
-            println!("No column metadata changes (types, nullability, defaults).");
+            println!(
+                "No schema metadata changes (types, nullability, defaults, constraints, indexes)."
+            );
         } else {
-            println!("Column metadata changes ({}):", metadata.changes.len());
+            println!("Schema metadata changes ({}):", metadata.changes.len());
             for change in &metadata.changes {
                 let marker = if change.is_breaking() { " [breaking]" } else { "" };
                 println!("  - {}{}", change, marker);
             }
         }
-        return;
+    } else {
+        println!("Schema metadata not compared:");
+        for (side, reason) in metadata.gaps() {
+            println!("  - {}: {}", side, reason);
+        }
     }
 
-    println!("Column metadata not compared:");
-    for (side, reason) in metadata.gaps() {
-        println!("  - {}: {}", side, reason);
+    // Printed whether or not the catalogs were readable, because a catalog can
+    // be present and still not expose every kind of rule. Without this, "no
+    // check constraints changed" and "check constraints were never read" look
+    // exactly alike.
+    let unread = metadata.unread_constraints();
+    if !unread.is_empty() {
+        println!("Not compared, because the source cannot report them:");
+        for (side, kind) in unread {
+            println!("  - {side}: {kind}");
+        }
     }
 }
 
@@ -973,12 +1015,8 @@ mod export_tests {
     #[test]
     fn csv_omits_gap_rows_when_both_sides_were_read() {
         let rows = schema_csv_rows(&result_with(MetadataReport {
-            source: CatalogAvailability::Available(TableCatalog {
-                columns: vec![column("id", "bigint", false)],
-            }),
-            target: CatalogAvailability::Available(TableCatalog {
-                columns: vec![column("id", "bigint", false)],
-            }),
+            source: CatalogAvailability::Available(TableCatalog::new(vec![column("id", "bigint", false)])),
+            target: CatalogAvailability::Available(TableCatalog::new(vec![column("id", "bigint", false)])),
             changes: vec![],
         }));
 

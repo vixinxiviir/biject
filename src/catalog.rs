@@ -16,7 +16,7 @@
 //! so the difference between "nothing changed" and "nothing was checked" stays
 //! visible.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::Serialize;
@@ -36,13 +36,214 @@ pub struct ColumnDef {
     pub ordinal: u32,
 }
 
-/// A table's columns, keyed by name for comparison.
+/// A rule the table enforces about its own rows.
+///
+/// Deliberately table-local: every kind here mentions only this table's own
+/// columns. **Foreign keys are not modelled.** They point at another table, and
+/// everything that consumes a catalog here works on one table at a time, so a
+/// key referencing something nobody has looked at could be reported but never
+/// acted on — and generating DDL for one means ordering work across tables,
+/// which is a different program from this one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Constraint {
+    PrimaryKey {
+        name: String,
+        /// In key order, which matters: `(a, b)` and `(b, a)` serve different
+        /// queries even though they forbid the same duplicates.
+        columns: Vec<String>,
+    },
+    Unique {
+        name: String,
+        columns: Vec<String>,
+    },
+    /// A row-level rule, such as `amount > 0`.
+    ///
+    /// The expression is the catalog's own spelling rather than what was
+    /// typed — PostgreSQL stores `CHECK (amount > 0)` and hands back
+    /// `((amount > 0))`. Comparable within one engine, not across two.
+    Check {
+        name: String,
+        expression: String,
+    },
+}
+
+/// A kind of table-level rule.
+///
+/// Exists so a catalog can say *which* kinds it managed to read. Not every
+/// engine exposes every kind: SQLite publishes primary keys and unique
+/// constraints through pragmas but keeps `CHECK` bodies only in the original
+/// `CREATE TABLE` text, which this does not parse. Without recording that, an
+/// empty list of checks would be indistinguishable from a table that has none
+/// — and a migration generated from it would confidently drop a rule it had
+/// simply never seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintKind {
+    PrimaryKey,
+    Unique,
+    Check,
+    Index,
+}
+
+impl ConstraintKind {
+    pub const ALL: [ConstraintKind; 4] = [
+        ConstraintKind::PrimaryKey,
+        ConstraintKind::Unique,
+        ConstraintKind::Check,
+        ConstraintKind::Index,
+    ];
+}
+
+impl fmt::Display for ConstraintKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            ConstraintKind::PrimaryKey => "primary keys",
+            ConstraintKind::Unique => "unique constraints",
+            ConstraintKind::Check => "check constraints",
+            ConstraintKind::Index => "indexes",
+        };
+        f.write_str(label)
+    }
+}
+
+impl Constraint {
+    pub fn kind(&self) -> ConstraintKind {
+        match self {
+            Constraint::PrimaryKey { .. } => ConstraintKind::PrimaryKey,
+            Constraint::Unique { .. } => ConstraintKind::Unique,
+            Constraint::Check { .. } => ConstraintKind::Check,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Constraint::PrimaryKey { name, .. }
+            | Constraint::Unique { name, .. }
+            | Constraint::Check { name, .. } => name,
+        }
+    }
+
+    /// The columns a constraint covers, empty for a `CHECK`.
+    pub fn columns(&self) -> &[String] {
+        match self {
+            Constraint::PrimaryKey { columns, .. } | Constraint::Unique { columns, .. } => columns,
+            Constraint::Check { .. } => &[],
+        }
+    }
+
+    /// What makes two constraints the same constraint.
+    ///
+    /// Names are excluded on purpose. Engines invent them — `customers_pkey`
+    /// on PostgreSQL, `PK__customer__3213E83F` on SQL Server — so two
+    /// identical primary keys routinely carry different names. Comparing on
+    /// name would report a difference where there is none, on every single
+    /// cross-engine comparison.
+    fn identity(&self) -> (&'static str, String) {
+        match self {
+            Constraint::PrimaryKey { columns, .. } => ("primary_key", columns.join(",")),
+            Constraint::Unique { columns, .. } => ("unique", columns.join(",")),
+            Constraint::Check { expression, .. } => ("check", normalize_expression(expression)),
+        }
+    }
+}
+
+impl fmt::Display for Constraint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Constraint::PrimaryKey { columns, .. } => {
+                write!(f, "PRIMARY KEY ({})", columns.join(", "))
+            }
+            Constraint::Unique { columns, .. } => write!(f, "UNIQUE ({})", columns.join(", ")),
+            Constraint::Check { expression, .. } => write!(f, "CHECK {expression}"),
+        }
+    }
+}
+
+/// A lookup structure.
+///
+/// Not a correctness rule, which is why it is kept apart from [`Constraint`].
+/// A missing index does not give a wrong answer; it turns a working query into
+/// a table scan. That is a production incident rather than a corruption, and
+/// worth reporting for the same reason.
+///
+/// Indexes that exist only to back a primary key or unique constraint are left
+/// out by the connectors that read them. The constraint already reports them,
+/// and listing both would double-count every key in the table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IndexDef {
+    pub name: String,
+    /// In index order, which determines the queries it can serve.
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
+impl IndexDef {
+    /// Two indexes are the same index when they cover the same columns in the
+    /// same order with the same uniqueness. Names are generated, so they are
+    /// no more comparable here than they are for constraints.
+    fn identity(&self) -> (String, bool) {
+        (self.columns.join(","), self.unique)
+    }
+}
+
+impl fmt::Display for IndexDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = if self.unique { "UNIQUE INDEX" } else { "INDEX" };
+        write!(f, "{kind} ({})", self.columns.join(", "))
+    }
+}
+
+/// A table as the database describes it: its columns, the rules it enforces,
+/// and the indexes over it.
+///
+/// `#[non_exhaustive]`: this grew from columns alone in 0.6, and it will grow
+/// again. Build one with [`TableCatalog::new`] and the `with_` methods rather
+/// than a struct literal.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct TableCatalog {
     pub columns: Vec<ColumnDef>,
+    pub constraints: Vec<Constraint>,
+    pub indexes: Vec<IndexDef>,
+    /// Constraint kinds this connector could not read for this table.
+    ///
+    /// Anything listed here is absent from `constraints` or `indexes` because
+    /// it was never looked at, not because the table has none. Comparison
+    /// skips these kinds outright rather than reporting every rule on the
+    /// other side as missing.
+    pub unread: Vec<ConstraintKind>,
 }
 
 impl TableCatalog {
+    pub fn new(columns: Vec<ColumnDef>) -> Self {
+        Self {
+            columns,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_constraints(mut self, constraints: Vec<Constraint>) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    pub fn with_indexes(mut self, indexes: Vec<IndexDef>) -> Self {
+        self.indexes = indexes;
+        self
+    }
+
+    /// Declare kinds this connector cannot read, so their absence is not read
+    /// as evidence that the table has none.
+    pub fn with_unread(mut self, unread: Vec<ConstraintKind>) -> Self {
+        self.unread = unread;
+        self
+    }
+
+    fn reads(&self, kind: ConstraintKind) -> bool {
+        !self.unread.contains(&kind)
+    }
+
     pub fn by_name(&self) -> BTreeMap<&str, &ColumnDef> {
         self.columns
             .iter()
@@ -52,6 +253,12 @@ impl TableCatalog {
 
     pub fn column(&self, name: &str) -> Option<&ColumnDef> {
         self.columns.iter().find(|column| column.name == name)
+    }
+
+    pub fn primary_key(&self) -> Option<&Constraint> {
+        self.constraints
+            .iter()
+            .find(|constraint| matches!(constraint, Constraint::PrimaryKey { .. }))
     }
 }
 
@@ -228,15 +435,33 @@ pub enum MetadataChange {
         from: u32,
         to: u32,
     },
+    /// A constraint the source enforces and the target does not.
+    ConstraintMissing { constraint: Constraint },
+    /// A constraint the target enforces and the source does not.
+    ConstraintExtra { constraint: Constraint },
+    /// An index the source has and the target lacks.
+    IndexMissing { index: IndexDef },
+    /// An index the target has and the source lacks.
+    IndexExtra { index: IndexDef },
 }
 
 impl MetadataChange {
-    pub fn column(&self) -> &str {
+    /// What the change is about: a column name, or a constraint or index name.
+    ///
+    /// Renamed from `column` in 0.6, when constraints and indexes arrived and
+    /// the old name stopped being true. A constraint spans zero or many
+    /// columns, so there is not always one to return.
+    pub fn subject(&self) -> &str {
         match self {
             MetadataChange::NativeType { column, .. }
             | MetadataChange::Nullability { column, .. }
             | MetadataChange::Default { column, .. }
             | MetadataChange::Ordinal { column, .. } => column,
+            MetadataChange::ConstraintMissing { constraint }
+            | MetadataChange::ConstraintExtra { constraint } => constraint.name(),
+            MetadataChange::IndexMissing { index } | MetadataChange::IndexExtra { index } => {
+                &index.name
+            }
         }
     }
 
@@ -255,6 +480,21 @@ impl MetadataChange {
             MetadataChange::NativeType { impact, .. } => *impact != TypeImpact::Widening,
             MetadataChange::Default { .. } => false,
             MetadataChange::Ordinal { .. } => false,
+
+            // A rule the source enforces and the target does not means the
+            // target can hold data the source could not: duplicate keys, or
+            // values outside a checked range. Code written against the source
+            // will meet rows it does not expect.
+            MetadataChange::ConstraintMissing { .. } => true,
+
+            // The reverse tightens the target. That breaks writers, not
+            // readers, and readers are the audience the rest of this tool
+            // classifies for — same reasoning as nullability above.
+            MetadataChange::ConstraintExtra { .. } => false,
+
+            // Indexes are a performance property, not a correctness one. A
+            // missing index is worth reporting and is never a wrong answer.
+            MetadataChange::IndexMissing { .. } | MetadataChange::IndexExtra { .. } => false,
         }
     }
 }
@@ -294,6 +534,14 @@ impl fmt::Display for MetadataChange {
             MetadataChange::Ordinal { column, from, to } => {
                 write!(f, "{column}: position {from} -> {to}")
             }
+            MetadataChange::ConstraintMissing { constraint } => {
+                write!(f, "{constraint} missing from target")
+            }
+            MetadataChange::ConstraintExtra { constraint } => {
+                write!(f, "{constraint} only in target")
+            }
+            MetadataChange::IndexMissing { index } => write!(f, "{index} missing from target"),
+            MetadataChange::IndexExtra { index } => write!(f, "{index} only in target"),
         }
     }
 }
@@ -344,8 +592,76 @@ pub fn compare(source: &TableCatalog, target: &TableCatalog) -> Vec<MetadataChan
         }
     }
 
-    changes.sort_by(|a, b| a.column().cmp(b.column()));
+    // Constraints and indexes are matched on what they do, never on what they
+    // are called: see `Constraint::identity`.
+    //
+    // A kind neither side could read is skipped entirely. Comparing a kind one
+    // connector cannot see against one that can would report every rule on the
+    // readable side as missing from the other — a long list of differences
+    // that are really one unread pragma. `MetadataReport::unread_constraints`
+    // reports the gap instead.
+    let comparable =
+        |kind: ConstraintKind| -> bool { source.reads(kind) && target.reads(kind) };
+
+    let target_constraints: BTreeSet<_> =
+        target.constraints.iter().map(Constraint::identity).collect();
+    for constraint in &source.constraints {
+        if comparable(constraint.kind())
+            && !target_constraints.contains(&constraint.identity())
+        {
+            changes.push(MetadataChange::ConstraintMissing {
+                constraint: constraint.clone(),
+            });
+        }
+    }
+
+    let source_constraints: BTreeSet<_> =
+        source.constraints.iter().map(Constraint::identity).collect();
+    for constraint in &target.constraints {
+        if comparable(constraint.kind())
+            && !source_constraints.contains(&constraint.identity())
+        {
+            changes.push(MetadataChange::ConstraintExtra {
+                constraint: constraint.clone(),
+            });
+        }
+    }
+
+    if comparable(ConstraintKind::Index) {
+        let target_indexes: BTreeSet<_> = target.indexes.iter().map(IndexDef::identity).collect();
+        for index in &source.indexes {
+            if !target_indexes.contains(&index.identity()) {
+                changes.push(MetadataChange::IndexMissing {
+                    index: index.clone(),
+                });
+            }
+        }
+
+        let source_indexes: BTreeSet<_> = source.indexes.iter().map(IndexDef::identity).collect();
+        for index in &target.indexes {
+            if !source_indexes.contains(&index.identity()) {
+                changes.push(MetadataChange::IndexExtra {
+                    index: index.clone(),
+                });
+            }
+        }
+    }
+
+    changes.sort_by(|a, b| a.subject().cmp(b.subject()));
     changes
+}
+
+/// Fold away spellings of the same rule.
+///
+/// Engines re-render a `CHECK` body into their own normal form and are
+/// inconsistent about parentheses, whitespace and case, so the text that comes
+/// back is rarely the text that went in.
+fn normalize_expression(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .to_ascii_lowercase()
+        .replace(' ', "")
 }
 
 /// Fold away spelling differences that are not real type changes.
@@ -379,7 +695,7 @@ mod tests {
     }
 
     fn catalog(columns: Vec<ColumnDef>) -> TableCatalog {
-        TableCatalog { columns }
+        TableCatalog::new(columns)
     }
 
     #[test]
@@ -482,7 +798,7 @@ mod tests {
 
         let changes = compare(&source, &target);
         assert_eq!(changes.len(), 3, "type, nullability and default: {changes:?}");
-        assert!(changes.iter().all(|change| change.column() == "c"));
+        assert!(changes.iter().all(|change| change.subject() == "c"));
     }
 
 
@@ -676,5 +992,200 @@ mod tests {
         assert!(!failed.is_available());
         assert!(failed.catalog().is_none());
         assert!(failed.explain().is_some(), "the reason must survive");
+    }
+
+    // ---- constraints and indexes ------------------------------------------
+
+    fn pk(name: &str, columns: &[&str]) -> Constraint {
+        Constraint::PrimaryKey {
+            name: name.to_string(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    fn unique(name: &str, columns: &[&str]) -> Constraint {
+        Constraint::Unique {
+            name: name.to_string(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    fn check(name: &str, expression: &str) -> Constraint {
+        Constraint::Check {
+            name: name.to_string(),
+            expression: expression.to_string(),
+        }
+    }
+
+    fn index(name: &str, columns: &[&str], unique: bool) -> IndexDef {
+        IndexDef {
+            name: name.to_string(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            unique,
+        }
+    }
+
+    fn col(name: &str, ordinal: u32) -> ColumnDef {
+        ColumnDef {
+            name: name.to_string(),
+            data_type: "bigint".to_string(),
+            nullable: false,
+            default: None,
+            ordinal,
+        }
+    }
+
+    fn one_column() -> Vec<ColumnDef> {
+        vec![col("id", 1)]
+    }
+
+    #[test]
+    fn the_same_key_under_different_names_is_not_a_difference() {
+        // Engines generate constraint names — `customers_pkey` on PostgreSQL,
+        // `PK__customer__3213E83F` on SQL Server. Matching on name would report
+        // a difference on essentially every cross-engine comparison.
+        let source =
+            TableCatalog::new(one_column()).with_constraints(vec![pk("customers_pkey", &["id"])]);
+        let target = TableCatalog::new(one_column())
+            .with_constraints(vec![pk("PK__customer__3213E83F", &["id"])]);
+
+        assert!(compare(&source, &target).is_empty());
+    }
+
+    #[test]
+    fn key_column_order_is_part_of_the_key() {
+        // (a, b) and (b, a) forbid the same duplicates but serve different
+        // queries, so they are not the same constraint.
+        let columns = vec![col("a", 1), col("b", 2)];
+        let source = TableCatalog::new(columns.clone())
+            .with_constraints(vec![pk("k", &["a", "b"])]);
+        let target =
+            TableCatalog::new(columns).with_constraints(vec![pk("k", &["b", "a"])]);
+
+        assert_eq!(compare(&source, &target).len(), 2, "one missing, one extra");
+    }
+
+    #[test]
+    fn a_rule_the_target_does_not_enforce_is_breaking() {
+        let source = TableCatalog::new(one_column())
+            .with_constraints(vec![unique("u", &["id"])]);
+        let target = TableCatalog::new(one_column());
+
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 1);
+        assert!(
+            matches!(changes[0], MetadataChange::ConstraintMissing { .. }),
+            "{changes:?}"
+        );
+        assert!(
+            changes[0].is_breaking(),
+            "the target can now hold duplicates the source could not"
+        );
+    }
+
+    #[test]
+    fn a_rule_only_the_target_enforces_is_reported_but_not_breaking() {
+        // A tighter target breaks writers, not readers, and readers are the
+        // audience the rest of the tool classifies for.
+        let source = TableCatalog::new(one_column());
+        let target = TableCatalog::new(one_column())
+            .with_constraints(vec![unique("u", &["id"])]);
+
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0], MetadataChange::ConstraintExtra { .. }));
+        assert!(!changes[0].is_breaking());
+    }
+
+    #[test]
+    fn indexes_are_reported_but_never_breaking() {
+        let source =
+            TableCatalog::new(one_column()).with_indexes(vec![index("i", &["id"], false)]);
+        let target = TableCatalog::new(one_column());
+
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0], MetadataChange::IndexMissing { .. }));
+        assert!(
+            !changes[0].is_breaking(),
+            "a missing index is slow, not wrong"
+        );
+    }
+
+    #[test]
+    fn a_check_is_matched_on_its_rule_not_its_spelling() {
+        // Engines re-render a CHECK body into their own normal form, so the
+        // text that comes back is rarely the text that went in.
+        let source = TableCatalog::new(one_column())
+            .with_constraints(vec![check("a", "(amount > 0)")]);
+        let target = TableCatalog::new(one_column())
+            .with_constraints(vec![check("b", "AMOUNT  >  0")]);
+
+        assert!(compare(&source, &target).is_empty());
+    }
+
+    #[test]
+    fn a_kind_the_connector_cannot_read_is_skipped_not_reported_as_missing() {
+        // The whole reason `unread` exists. SQLite cannot report checks; if
+        // that were treated as "has none", every check on the other side would
+        // be reported as missing and a migration would try to drop rules that
+        // are really still there.
+        let source = TableCatalog::new(one_column()).with_constraints(vec![
+            check("a", "amount > 0"),
+            unique("u", &["id"]),
+        ]);
+        let target = TableCatalog::new(one_column())
+            .with_constraints(vec![unique("u2", &["id"])])
+            .with_unread(vec![ConstraintKind::Check]);
+
+        let changes = compare(&source, &target);
+        assert!(
+            changes.is_empty(),
+            "the unique matches and the check is not comparable: {changes:?}"
+        );
+    }
+
+    #[test]
+    fn an_unread_kind_only_silences_that_kind() {
+        let source = TableCatalog::new(one_column()).with_constraints(vec![
+            check("a", "amount > 0"),
+            unique("u", &["id"]),
+        ]);
+        let target = TableCatalog::new(one_column()).with_unread(vec![ConstraintKind::Check]);
+
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 1, "the unique is still compared: {changes:?}");
+        assert!(matches!(
+            changes[0],
+            MetadataChange::ConstraintMissing {
+                constraint: Constraint::Unique { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn every_metadata_change_variant_serialises() {
+        // The tagged representation cannot encode a newtype variant holding a
+        // plain string, and that failure only shows on export. Constraints and
+        // indexes added four variants, so this covers them too.
+        let changes = vec![
+            MetadataChange::ConstraintMissing {
+                constraint: pk("k", &["id"]),
+            },
+            MetadataChange::ConstraintExtra {
+                constraint: check("c", "amount > 0"),
+            },
+            MetadataChange::IndexMissing {
+                index: index("i", &["id"], true),
+            },
+            MetadataChange::IndexExtra {
+                index: index("j", &["id"], false),
+            },
+        ];
+
+        for change in &changes {
+            serde_json::to_string(change)
+                .unwrap_or_else(|e| panic!("{change:?} must serialise: {e}"));
+        }
     }
 }

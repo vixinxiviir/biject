@@ -1,5 +1,5 @@
 use super::ConnectorError;
-use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
+use crate::catalog::{CatalogAvailability, ColumnDef, Constraint, IndexDef, TableCatalog};
 use polars::prelude::*;
 use tokio_postgres::{types::Type, NoTls};
 
@@ -316,7 +316,109 @@ async fn load_catalog(
         })
         .collect();
 
-    Ok(TableCatalog { columns })
+    // `contype` is Postgres' internal "char" type, which tokio-postgres will
+    // not hand back as a String. Cast it in the query rather than decoding a
+    // single byte here.
+    //
+    // Foreign keys ('f') are deliberately absent: see `catalog::Constraint`.
+    const CONSTRAINT_QUERY: &str = "
+        SELECT con.conname,
+               con.contype::text,
+               pg_get_expr(con.conbin, con.conrelid) AS check_expr,
+               ARRAY(
+                 SELECT a.attname
+                 FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a
+                   ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                 ORDER BY k.ord
+               ) AS columns
+        FROM pg_constraint con
+        JOIN pg_class c     ON c.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1
+          AND c.relname = $2
+          AND con.contype IN ('p', 'u', 'c')
+        ORDER BY con.conname";
+
+    let constraint_rows = client
+        .query(CONSTRAINT_QUERY, &[&schema, &table])
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    let mut constraints = Vec::with_capacity(constraint_rows.len());
+    for row in &constraint_rows {
+        let name: String = row.get(0);
+        let kind: String = row.get(1);
+        let expression: Option<String> = row.get(2);
+        let columns: Vec<String> = row.get(3);
+
+        constraints.push(match kind.as_str() {
+            "p" => Constraint::PrimaryKey { name, columns },
+            "u" => Constraint::Unique { name, columns },
+            "c" => Constraint::Check {
+                name,
+                // A check with no readable expression is not something to
+                // guess at, so it is skipped rather than reported as an empty
+                // rule that would compare unequal to everything.
+                expression: match expression {
+                    Some(expression) => expression,
+                    None => continue,
+                },
+            },
+            // The query filters to the three above; anything else is a schema
+            // change in Postgres itself rather than in the user's table.
+            _ => continue,
+        });
+    }
+
+    // Indexes that exist only to back a primary key or unique constraint are
+    // excluded: the constraint already reports them, and listing both would
+    // report every key in the table twice.
+    //
+    // Columns come from pg_get_indexdef one position at a time, which renders
+    // an expression index as its expression — `lower(email::text)` — rather
+    // than dropping it. Reading pg_index.indkey directly gives 0 for an
+    // expression and would silently lose the column. Note the `+ 1`: indkey is
+    // a 0-based int2vector but pg_get_indexdef numbers columns from 1, and
+    // position 0 returns the whole CREATE INDEX statement.
+    const INDEX_QUERY: &str = "
+        SELECT i.relname,
+               ix.indisunique,
+               ARRAY(
+                 SELECT pg_get_indexdef(ix.indexrelid, (k.ord + 1)::integer, true)
+                 FROM generate_subscripts(ix.indkey, 1) AS k(ord)
+                 ORDER BY k.ord
+               ) AS columns
+        FROM pg_index ix
+        JOIN pg_class i     ON i.oid = ix.indexrelid
+        JOIN pg_class c     ON c.oid = ix.indrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1
+          AND c.relname = $2
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_constraint con
+            WHERE con.conindid = ix.indexrelid
+              AND con.contype IN ('p', 'u')
+          )
+        ORDER BY i.relname";
+
+    let index_rows = client
+        .query(INDEX_QUERY, &[&schema, &table])
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    let indexes = index_rows
+        .iter()
+        .map(|row| IndexDef {
+            name: row.get::<_, String>(0),
+            unique: row.get::<_, bool>(1),
+            columns: row.get::<_, Vec<String>>(2),
+        })
+        .collect();
+
+    Ok(TableCatalog::new(columns)
+        .with_constraints(constraints)
+        .with_indexes(indexes))
 }
 
 /// Split a bare table reference into schema and table.

@@ -1,5 +1,7 @@
 use super::ConnectorError;
-use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
+use crate::catalog::{
+    CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, TableCatalog,
+};
 use polars::prelude::*;
 use rusqlite::{types::ValueRef, Connection};
 
@@ -204,20 +206,23 @@ fn load_catalog(
     // The table-valued form takes bound parameters, unlike `PRAGMA x(y)`, so
     // the table name never has to be interpolated into SQL.
     let sql = if schema.is_some() {
-        "SELECT cid, name, type, \"notnull\", dflt_value          FROM pragma_table_info(?1, ?2) ORDER BY cid"
+        "SELECT cid, name, type, \"notnull\", dflt_value, pk          FROM pragma_table_info(?1, ?2) ORDER BY cid"
     } else {
-        "SELECT cid, name, type, \"notnull\", dflt_value          FROM pragma_table_info(?1) ORDER BY cid"
+        "SELECT cid, name, type, \"notnull\", dflt_value, pk          FROM pragma_table_info(?1) ORDER BY cid"
     };
 
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
 
-    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<ColumnDef> {
+    // The second element is the column's 1-based position in the primary key,
+    // or 0 when it is not part of one.
+    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<(ColumnDef, i64)> {
         let cid: i64 = row.get(0)?;
         let declared: String = row.get(2)?;
         let not_null: i64 = row.get(3)?;
-        Ok(ColumnDef {
+        let key_position: i64 = row.get(5)?;
+        Ok((ColumnDef {
             name: row.get(1)?,
             // SQLite keeps the declared type verbatim, including a length, and
             // will happily store anything regardless. It is still what the
@@ -228,10 +233,10 @@ fn load_catalog(
             // cid is 0-based; every other connector reports 1-based, and a
             // mismatch would show as a spurious reordering on every column.
             ordinal: (cid + 1) as u32,
-        })
+        }, key_position))
     };
 
-    let columns: Vec<ColumnDef> = match schema {
+    let with_key_positions: Vec<(ColumnDef, i64)> = match schema {
         Some(schema) => stmt
             .query_map(rusqlite::params![table, schema], map_row)
             .and_then(|rows| rows.collect())
@@ -242,13 +247,127 @@ fn load_catalog(
             .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?,
     };
 
-    if columns.is_empty() {
+    if with_key_positions.is_empty() {
         return Err(ConnectorError::QueryFailed(format!(
             "no table {table} found, or it has no columns"
         )));
     }
 
-    Ok(TableCatalog { columns })
+    // The primary key comes from `table_info`, not from `index_list`. A rowid
+    // alias — `id INTEGER PRIMARY KEY`, the commonest primary key in SQLite —
+    // carries a pk position in `table_info` but produces no index whatsoever,
+    // so reading the index list alone would miss it entirely.
+    let mut key_columns: Vec<(i64, String)> = with_key_positions
+        .iter()
+        .filter(|(_, position)| *position > 0)
+        .map(|(column, position)| (*position, column.name.clone()))
+        .collect();
+    key_columns.sort_by_key(|(position, _)| *position);
+
+    let mut constraints = Vec::new();
+    if !key_columns.is_empty() {
+        constraints.push(Constraint::PrimaryKey {
+            // SQLite does not name an implicit primary key. Invented here so
+            // there is something to render in DDL; comparison matches on
+            // columns, never on the name.
+            name: format!("{table}_pkey"),
+            columns: key_columns.into_iter().map(|(_, name)| name).collect(),
+        });
+    }
+
+    let columns: Vec<ColumnDef> = with_key_positions
+        .into_iter()
+        .map(|(column, _)| column)
+        .collect();
+
+    // `origin` says where an index came from: 'c' for a CREATE INDEX, 'u' for
+    // a UNIQUE constraint, 'pk' for a primary key. The 'pk' entries are
+    // dropped because `table_info` already reported that key, and listing both
+    // would report every composite primary key twice.
+    let list_sql = if schema.is_some() {
+        "SELECT name, \"unique\", origin FROM pragma_index_list(?1, ?2)"
+    } else {
+        "SELECT name, \"unique\", origin FROM pragma_index_list(?1)"
+    };
+
+    let mut list_stmt = conn
+        .prepare(list_sql)
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    let map_index = |row: &rusqlite::Row| -> rusqlite::Result<(String, bool, String)> {
+        let unique: i64 = row.get(1)?;
+        Ok((row.get(0)?, unique == 1, row.get(2)?))
+    };
+
+    let listed: Vec<(String, bool, String)> = match schema {
+        Some(schema) => list_stmt
+            .query_map(rusqlite::params![table, schema], map_index)
+            .and_then(|rows| rows.collect())
+            .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?,
+        None => list_stmt
+            .query_map(rusqlite::params![table], map_index)
+            .and_then(|rows| rows.collect())
+            .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?,
+    };
+    drop(list_stmt);
+
+    let mut indexes = Vec::new();
+    for (name, unique, origin) in listed {
+        if origin == "pk" {
+            continue;
+        }
+
+        let info_sql = if schema.is_some() {
+            "SELECT name FROM pragma_index_info(?1, ?2) ORDER BY seqno"
+        } else {
+            "SELECT name FROM pragma_index_info(?1) ORDER BY seqno"
+        };
+        let mut info_stmt = conn
+            .prepare(info_sql)
+            .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+        let map_name = |row: &rusqlite::Row| -> rusqlite::Result<Option<String>> { row.get(0) };
+        let index_columns: Vec<Option<String>> = match schema {
+            Some(schema) => info_stmt
+                .query_map(rusqlite::params![name, schema], map_name)
+                .and_then(|rows| rows.collect())
+                .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?,
+            None => info_stmt
+                .query_map(rusqlite::params![name], map_name)
+                .and_then(|rows| rows.collect())
+                .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?,
+        };
+
+        // A null name means the index is over an expression rather than a
+        // column. SQLite does not expose the expression through this pragma,
+        // so the index cannot be described and is skipped rather than
+        // reported with a hole in it.
+        let Some(index_columns) = index_columns.into_iter().collect::<Option<Vec<String>>>() else {
+            continue;
+        };
+
+        if origin == "u" {
+            constraints.push(Constraint::Unique {
+                name,
+                columns: index_columns,
+            });
+        } else {
+            indexes.push(IndexDef {
+                name,
+                columns: index_columns,
+                unique,
+            });
+        }
+    }
+
+    // CHECK constraints are the one kind SQLite will not report. They live only
+    // in the original CREATE TABLE text in `sqlite_master`, and recovering them
+    // means parsing SQL. Declared unread so their absence is never read as
+    // evidence that the table has none.
+    Ok(TableCatalog::new(columns)
+        .with_constraints(constraints)
+        .with_indexes(indexes)
+        .with_unread(vec![ConstraintKind::Check]))
 }
 
 /// Split a table reference into an optional schema and a table name.
@@ -482,5 +601,149 @@ mod tests {
     fn bare_table_names_are_wrapped_but_statements_are_not() {
         assert_eq!(normalize_query("customers"), "SELECT * FROM customers");
         assert_eq!(normalize_query("SELECT 1"), "SELECT 1");
+    }
+
+    // ---- constraints and indexes ------------------------------------------
+
+    fn catalog_of(path: &std::path::Path, table: &str) -> crate::catalog::TableCatalog {
+        match read_catalog(path.to_str().unwrap(), table) {
+            CatalogAvailability::Available(catalog) => catalog,
+            other => panic!("expected a catalog for {table}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_rowid_alias_primary_key_is_found() {
+        // `id INTEGER PRIMARY KEY` is the commonest primary key in SQLite and
+        // it creates no index at all — pragma_index_list returns nothing for
+        // it. Reading the index list alone would miss it entirely, so the key
+        // is taken from pragma_table_info instead.
+        let path = scratch_db(
+            "rowid_pk",
+            "CREATE TABLE a (id INTEGER PRIMARY KEY, name TEXT);",
+        );
+
+        let catalog = catalog_of(&path, "a");
+        let key = catalog.primary_key().expect("the primary key");
+        assert_eq!(key.columns(), ["id"]);
+        assert!(catalog.indexes.is_empty(), "{:?}", catalog.indexes);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_composite_primary_key_is_read_once_and_in_key_order() {
+        // A composite key does produce an index, with origin 'pk'. Reporting
+        // both that and the key from table_info would list it twice.
+        let path = scratch_db(
+            "composite_pk",
+            "CREATE TABLE b (x INTEGER NOT NULL, y TEXT NOT NULL, PRIMARY KEY (x, y));",
+        );
+
+        let catalog = catalog_of(&path, "b");
+        let keys: Vec<_> = catalog
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, crate::catalog::Constraint::PrimaryKey { .. }))
+            .collect();
+
+        assert_eq!(keys.len(), 1, "read exactly once: {:?}", catalog.constraints);
+        assert_eq!(keys[0].columns(), ["x", "y"]);
+        assert!(
+            catalog.indexes.is_empty(),
+            "the key's own index is not listed again: {:?}",
+            catalog.indexes
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn unique_constraints_and_plain_indexes_are_told_apart() {
+        let path = scratch_db(
+            "uniques",
+            "CREATE TABLE c (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, region TEXT);
+             CREATE INDEX c_region_idx ON c (region);
+             CREATE UNIQUE INDEX c_multi_idx ON c (region, email);",
+        );
+
+        let catalog = catalog_of(&path, "c");
+
+        let uniques: Vec<_> = catalog
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, crate::catalog::Constraint::Unique { .. }))
+            .collect();
+        assert_eq!(uniques.len(), 1, "{:?}", catalog.constraints);
+        assert_eq!(uniques[0].columns(), ["email"]);
+
+        let mut index_names: Vec<&str> =
+            catalog.indexes.iter().map(|i| i.name.as_str()).collect();
+        index_names.sort_unstable();
+        assert_eq!(index_names, ["c_multi_idx", "c_region_idx"]);
+
+        let multi = catalog
+            .indexes
+            .iter()
+            .find(|i| i.name == "c_multi_idx")
+            .unwrap();
+        assert_eq!(multi.columns, ["region", "email"], "in index order");
+        assert!(multi.unique);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn check_constraints_are_declared_unreadable_rather_than_reported_as_absent() {
+        // SQLite keeps CHECK bodies only in the original CREATE TABLE text.
+        // Saying so is the difference between "this table has no checks" and
+        // "nobody looked" — and a migration built on the wrong one would drop
+        // a rule that is still there.
+        let path = scratch_db(
+            "checks",
+            "CREATE TABLE d (id INTEGER PRIMARY KEY, amount REAL, CHECK (amount > 0));",
+        );
+
+        let catalog = catalog_of(&path, "d");
+        assert!(
+            catalog.unread.contains(&crate::catalog::ConstraintKind::Check),
+            "the gap is declared: {:?}",
+            catalog.unread
+        );
+        assert!(
+            !catalog.unread.contains(&crate::catalog::ConstraintKind::PrimaryKey),
+            "only checks are unreadable: {:?}",
+            catalog.unread
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_table_missing_its_keys_reports_them() {
+        let path = scratch_db(
+            "compare",
+            "CREATE TABLE src (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE);
+             CREATE INDEX src_email_idx ON src (email);
+             CREATE TABLE tgt (id INTEGER, email TEXT NOT NULL);",
+        );
+
+        let changes = crate::catalog::compare(&catalog_of(&path, "src"), &catalog_of(&path, "tgt"));
+
+        let missing: Vec<_> = changes
+            .iter()
+            .filter(|c| matches!(c, crate::catalog::MetadataChange::ConstraintMissing { .. }))
+            .collect();
+        assert_eq!(missing.len(), 2, "primary key and unique: {changes:#?}");
+        assert!(missing.iter().all(|c| c.is_breaking()));
+
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, crate::catalog::MetadataChange::IndexMissing { .. })),
+            "{changes:#?}"
+        );
+
+        std::fs::remove_file(&path).ok();
     }
 }

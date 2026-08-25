@@ -1,5 +1,7 @@
 use super::ConnectorError;
-use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
+use crate::catalog::{
+    CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, TableCatalog,
+};
 use mysql_async::{consts::ColumnType, prelude::*, Opts, OptsBuilder, Pool, Row, Value};
 use polars::prelude::*;
 
@@ -331,14 +333,136 @@ async fn load_catalog(
         .await
         .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
 
-    drop(conn);
-    pool.disconnect().await.ok();
-
     if rows.is_empty() {
+        drop(conn);
+        pool.disconnect().await.ok();
         return Err(ConnectorError::QueryFailed(format!(
             "no table {schema}.{table} found, or it has no columns"
         )));
     }
+
+    // Keys and unique constraints. Foreign keys are excluded deliberately: see
+    // `catalog::Constraint`.
+    const CONSTRAINT_QUERY: &str = "
+        SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE
+        FROM information_schema.TABLE_CONSTRAINTS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+          AND CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')
+        ORDER BY CONSTRAINT_NAME";
+
+    let constraint_rows: Vec<(String, String)> = conn
+        .exec(CONSTRAINT_QUERY, (schema, table))
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    const KEY_COLUMN_QUERY: &str = "
+        SELECT CONSTRAINT_NAME, COLUMN_NAME
+        FROM information_schema.KEY_COLUMN_USAGE
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION";
+
+    let key_column_rows: Vec<(String, String)> = conn
+        .exec(KEY_COLUMN_QUERY, (schema, table))
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    let mut key_columns: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for (constraint, column) in key_column_rows {
+        key_columns.entry(constraint).or_default().push(column);
+    }
+
+    let mut constraints = Vec::new();
+    for (name, kind) in constraint_rows {
+        // Ordered by ORDINAL_POSITION above, so key order is preserved.
+        let columns = key_columns.get(&name).cloned().unwrap_or_default();
+        if columns.is_empty() {
+            continue;
+        }
+        constraints.push(if kind == "PRIMARY KEY" {
+            Constraint::PrimaryKey { name, columns }
+        } else {
+            Constraint::Unique { name, columns }
+        });
+    }
+
+    // CHECK_CONSTRAINTS arrived in MySQL 8.0.16 and MariaDB 10.2. Older servers
+    // do not have the view at all, so a failure here means the kind cannot be
+    // read rather than that the table has none — recorded, never assumed away.
+    //
+    // The view carries no table name, hence the join.
+    const CHECK_QUERY: &str = "
+        SELECT cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+        FROM information_schema.CHECK_CONSTRAINTS cc
+        JOIN information_schema.TABLE_CONSTRAINTS tc
+          ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA
+         AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+        WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ?
+        ORDER BY cc.CONSTRAINT_NAME";
+
+    let mut unread = Vec::new();
+    match conn
+        .exec::<(String, String), _, _>(CHECK_QUERY, (schema, table))
+        .await
+    {
+        Ok(rows) => {
+            for (name, expression) in rows {
+                constraints.push(Constraint::Check { name, expression });
+            }
+        }
+        Err(_) => unread.push(ConstraintKind::Check),
+    }
+
+    // STATISTICS lists the indexes behind primary keys and unique constraints
+    // as well as freestanding ones. Those are excluded here because the
+    // constraints above already report them; listing both would report every
+    // key in the table twice.
+    const INDEX_QUERY: &str = "
+        SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+          AND INDEX_NAME NOT IN (
+            SELECT CONSTRAINT_NAME
+            FROM information_schema.TABLE_CONSTRAINTS
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+          )
+        ORDER BY INDEX_NAME, SEQ_IN_INDEX";
+
+    let index_rows: Vec<(String, i64, Option<String>)> = conn
+        .exec(INDEX_QUERY, (schema, table, schema, table))
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    drop(conn);
+    pool.disconnect().await.ok();
+
+    let mut grouped: std::collections::BTreeMap<String, (bool, Vec<String>)> = Default::default();
+    let mut functional = false;
+    for (name, non_unique, column) in index_rows {
+        // A null column name means a functional index, whose expression lives
+        // in a column older servers do not have. Rather than describe such an
+        // index with a hole in it, indexes are declared unreadable for this
+        // table — blunt, but it never claims an index is something it is not.
+        let Some(column) = column else {
+            functional = true;
+            continue;
+        };
+        let entry = grouped.entry(name).or_insert((non_unique == 0, Vec::new()));
+        entry.1.push(column);
+    }
+
+    let indexes: Vec<IndexDef> = if functional {
+        unread.push(ConstraintKind::Index);
+        Vec::new()
+    } else {
+        grouped
+            .into_iter()
+            .map(|(name, (unique, columns))| IndexDef {
+                name,
+                columns,
+                unique,
+            })
+            .collect()
+    };
 
     let columns = rows
         .into_iter()
@@ -351,7 +475,10 @@ async fn load_catalog(
         })
         .collect();
 
-    Ok(TableCatalog { columns })
+    Ok(TableCatalog::new(columns)
+        .with_constraints(constraints)
+        .with_indexes(indexes)
+        .with_unread(unread))
 }
 
 /// Split a table reference into schema and table.

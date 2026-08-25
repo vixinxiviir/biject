@@ -10,6 +10,42 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Primary keys, unique constraints, check constraints and indexes** in
+  schema comparison, on all four engines. A comparison used to see columns and
+  nothing below them, so a table could be reported as matching while permitting
+  duplicates the other forbade and scanning where the other used an index.
+  Losing a rule the source enforces is breaking; a missing index is reported
+  but never breaking, because it is slow rather than wrong.
+- **Constraints are matched on what they do, not what they are called.**
+  Engines invent names — `customers_pkey`, `PK__customer__3213E83F` — so
+  matching on them would report a difference on nearly every comparison.
+- **Kinds a connector cannot read are declared, not assumed absent.** SQLite
+  keeps `CHECK` bodies only in the original `CREATE TABLE` text, and MySQL
+  before 8.0.16 has no `CHECK_CONSTRAINTS` view at all. Both now say so, and
+  comparison skips that kind rather than reporting every rule on the other
+  side as missing.
+
+### Changed
+
+- **Breaking:** `TableCatalog` is `#[non_exhaustive]` and carries
+  `constraints`, `indexes` and `unread`. Build one with `TableCatalog::new`
+  and the `with_` methods rather than a struct literal.
+- **Breaking:** `MetadataChange::column` is now `subject`. A constraint spans
+  zero or many columns, so there is not always one to return.
+
+### Known limits
+
+- **Foreign keys are not modelled.** They reference another table, and
+  everything here works on one table at a time.
+- **Check expressions compare within an engine, not across two.** Each server
+  re-renders the body into its own spelling: `(amount > (0)::numeric)` on
+  PostgreSQL, ``(`amount` > 0)`` on MySQL, `([amount]>(0))` on SQL Server.
+- **`CREATE UNIQUE INDEX` classifies differently by engine** — a unique
+  constraint on MySQL, an index on PostgreSQL and SQL Server. Each reading is
+  faithful to its own server, so a cross-engine comparison reports it.
+
 ### Fixed
 
 - **A table with no rows was read as a table with no columns.** Every

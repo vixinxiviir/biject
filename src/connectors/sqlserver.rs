@@ -1,5 +1,5 @@
 use super::ConnectorError;
-use crate::catalog::{CatalogAvailability, ColumnDef, TableCatalog};
+use crate::catalog::{CatalogAvailability, ColumnDef, Constraint, IndexDef, TableCatalog};
 use futures_util::TryStreamExt;
 use polars::prelude::*;
 use tiberius::{AuthMethod, Client, ColumnData, ColumnType, Config, QueryItem, Row};
@@ -451,7 +451,116 @@ async fn load_catalog(
         });
     }
 
-    Ok(TableCatalog { columns })
+    // SQL Server keeps primary keys, unique constraints and plain indexes in
+    // one place, distinguished by flags, so a single pass yields all three.
+    //
+    // `i.type <> 0` skips the heap. `ic.key_ordinal > 0` skips INCLUDE
+    // columns, which ride along in the index but are not part of its key —
+    // treating them as key columns would make an index compare unequal to the
+    // identical index elsewhere.
+    const INDEX_QUERY: &str = "
+        SELECT i.name, i.is_unique, i.is_primary_key, i.is_unique_constraint,
+               c.name, ic.key_ordinal
+        FROM sys.indexes i
+        JOIN sys.index_columns ic
+          ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+        JOIN sys.columns c
+          ON c.object_id = i.object_id AND c.column_id = ic.column_id
+        JOIN sys.objects o ON o.object_id = i.object_id
+        JOIN sys.schemas s ON s.schema_id = o.schema_id
+        WHERE s.name = @P1 AND o.name = @P2
+          AND i.type <> 0
+          AND ic.key_ordinal > 0
+        ORDER BY i.name, ic.key_ordinal";
+
+    let index_rows = client
+        .query(INDEX_QUERY, &[&schema, &table])
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?
+        .into_first_result()
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    struct Grouped {
+        unique: bool,
+        primary_key: bool,
+        unique_constraint: bool,
+        columns: Vec<String>,
+    }
+
+    let mut grouped: std::collections::BTreeMap<String, Grouped> = Default::default();
+    for row in index_rows {
+        let name: &str = row.get(0).unwrap_or_default();
+        let unique: bool = row.get(1).unwrap_or(false);
+        let primary_key: bool = row.get(2).unwrap_or(false);
+        let unique_constraint: bool = row.get(3).unwrap_or(false);
+        let column: &str = row.get(4).unwrap_or_default();
+
+        grouped
+            .entry(name.to_string())
+            .or_insert(Grouped {
+                unique,
+                primary_key,
+                unique_constraint,
+                columns: Vec::new(),
+            })
+            .columns
+            .push(column.to_string());
+    }
+
+    let mut constraints = Vec::new();
+    let mut indexes = Vec::new();
+    for (name, group) in grouped {
+        if group.primary_key {
+            constraints.push(Constraint::PrimaryKey {
+                name,
+                columns: group.columns,
+            });
+        } else if group.unique_constraint {
+            constraints.push(Constraint::Unique {
+                name,
+                columns: group.columns,
+            });
+        } else {
+            // A freestanding index, including a unique one created with
+            // CREATE UNIQUE INDEX rather than as a constraint. SQL Server
+            // keeps that distinction and so does this.
+            indexes.push(IndexDef {
+                name,
+                columns: group.columns,
+                unique: group.unique,
+            });
+        }
+    }
+
+    const CHECK_QUERY: &str = "
+        SELECT cc.name, cc.definition
+        FROM sys.check_constraints cc
+        JOIN sys.objects o ON o.object_id = cc.parent_object_id
+        JOIN sys.schemas s ON s.schema_id = o.schema_id
+        WHERE s.name = @P1 AND o.name = @P2
+        ORDER BY cc.name";
+
+    let check_rows = client
+        .query(CHECK_QUERY, &[&schema, &table])
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?
+        .into_first_result()
+        .await
+        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+
+    for row in check_rows {
+        let name: &str = row.get(0).unwrap_or_default();
+        let definition: &str = row.get(1).unwrap_or_default();
+        constraints.push(Constraint::Check {
+            name: name.to_string(),
+            expression: definition.to_string(),
+        });
+    }
+
+    Ok(TableCatalog::new(columns)
+        .with_constraints(constraints)
+        .with_indexes(indexes))
 }
 
 /// Reassemble a declared type from the parts INFORMATION_SCHEMA reports.

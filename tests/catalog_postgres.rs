@@ -87,6 +87,8 @@ fn create_fixtures(dsn: &str) {
     const DDL: &str = "
         DROP TABLE IF EXISTS dev;
         DROP TABLE IF EXISTS empties;
+        DROP TABLE IF EXISTS constrained;
+        DROP TABLE IF EXISTS unconstrained;
         DROP SCHEMA IF EXISTS reporting CASCADE;
 
         CREATE TABLE dev (
@@ -103,6 +105,28 @@ fn create_fixtures(dsn: &str) {
           note TEXT NOT NULL DEFAULT '',
           amount NUMERIC(12,4) NOT NULL,
           created TIMESTAMPTZ DEFAULT now()
+        );
+
+        CREATE TABLE constrained (
+          id BIGINT NOT NULL,
+          email VARCHAR(50) NOT NULL,
+          region TEXT,
+          amount NUMERIC(12,2),
+          CONSTRAINT constrained_pkey PRIMARY KEY (id),
+          CONSTRAINT constrained_email_key UNIQUE (email),
+          CONSTRAINT constrained_amount_ck CHECK (amount > 0)
+        );
+        CREATE INDEX constrained_region_idx ON constrained (region);
+        CREATE UNIQUE INDEX constrained_multi_idx ON constrained (region, amount);
+        CREATE INDEX constrained_lower_email_idx ON constrained (lower(email));
+
+        -- The same columns with every rule removed, so a comparison isolates
+        -- constraints and indexes from everything else.
+        CREATE TABLE unconstrained (
+          id BIGINT NOT NULL,
+          email VARCHAR(50) NOT NULL,
+          region TEXT,
+          amount NUMERIC(12,2)
         );
 
         CREATE SCHEMA reporting;
@@ -292,4 +316,155 @@ fn comparing_against_an_empty_table_finds_no_differences() {
         "spurious type changes: {:?}",
         diff.type_changes
     );
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn reads_primary_keys_unique_constraints_and_checks() {
+    let dsn = dsn();
+    setup(&dsn);
+
+    let CatalogAvailability::Available(catalog) = runtime().block_on(read(&dsn, "constrained"))
+    else {
+        panic!("expected a catalog");
+    };
+
+    let primary = catalog.primary_key().expect("a primary key");
+    assert_eq!(primary.columns(), ["id"]);
+
+    let unique: Vec<_> = catalog
+        .constraints
+        .iter()
+        .filter(|c| matches!(c, catalog::Constraint::Unique { .. }))
+        .collect();
+    assert_eq!(unique.len(), 1, "{:?}", catalog.constraints);
+    assert_eq!(unique[0].columns(), ["email"]);
+
+    let checks: Vec<_> = catalog
+        .constraints
+        .iter()
+        .filter(|c| matches!(c, catalog::Constraint::Check { .. }))
+        .collect();
+    assert_eq!(checks.len(), 1, "{:?}", catalog.constraints);
+    assert!(
+        checks[0].to_string().contains("amount"),
+        "the rule text comes through: {}",
+        checks[0]
+    );
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn reads_indexes_without_double_counting_the_ones_backing_constraints() {
+    // Postgres creates an index for every primary key and unique constraint.
+    // Reporting those as indexes as well would list every key in the table
+    // twice, and a migration generated from it would try to create each one
+    // both ways.
+    let dsn = dsn();
+    setup(&dsn);
+
+    let CatalogAvailability::Available(catalog) = runtime().block_on(read(&dsn, "constrained"))
+    else {
+        panic!("expected a catalog");
+    };
+
+    let names: Vec<&str> = catalog
+        .indexes
+        .iter()
+        .map(|index| index.name.as_str())
+        .collect();
+
+    assert!(
+        !names.iter().any(|name| name.contains("pkey")
+            || *name == "constrained_email_key"),
+        "constraint-backing indexes must not be listed again: {names:?}"
+    );
+    assert_eq!(names.len(), 3, "{names:?}");
+
+    let multi = catalog
+        .indexes
+        .iter()
+        .find(|index| index.name == "constrained_multi_idx")
+        .expect("the multi-column index");
+    assert_eq!(
+        multi.columns,
+        ["region", "amount"],
+        "both columns, in index order"
+    );
+    assert!(multi.unique);
+
+    // An expression index has no column to name. Rendering the expression
+    // keeps it visible; reading pg_index.indkey directly would report a
+    // column number of zero and silently lose it.
+    let expression = catalog
+        .indexes
+        .iter()
+        .find(|index| index.name == "constrained_lower_email_idx")
+        .expect("the expression index");
+    assert!(
+        expression.columns[0].contains("lower"),
+        "{:?}",
+        expression.columns
+    );
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn a_table_missing_its_rules_reports_each_one() {
+    let dsn = dsn();
+    setup(&dsn);
+
+    let (CatalogAvailability::Available(source), CatalogAvailability::Available(target)) = (
+        runtime().block_on(read(&dsn, "constrained")),
+        runtime().block_on(read(&dsn, "unconstrained")),
+    ) else {
+        panic!("expected two catalogs");
+    };
+
+    let changes = catalog::compare(&source, &target);
+
+    let missing_constraints: Vec<_> = changes
+        .iter()
+        .filter(|c| matches!(c, MetadataChange::ConstraintMissing { .. }))
+        .collect();
+    assert_eq!(
+        missing_constraints.len(),
+        3,
+        "primary key, unique and check: {changes:#?}"
+    );
+
+    let missing_indexes: Vec<_> = changes
+        .iter()
+        .filter(|c| matches!(c, MetadataChange::IndexMissing { .. }))
+        .collect();
+    assert_eq!(missing_indexes.len(), 3, "{changes:#?}");
+
+    // Losing a uniqueness rule lets the target hold rows the source could not.
+    assert!(
+        missing_constraints.iter().all(|c| c.is_breaking()),
+        "a rule the target does not enforce is breaking"
+    );
+    // A missing index is a performance problem, not a wrong answer.
+    assert!(
+        missing_indexes.iter().all(|c| !c.is_breaking()),
+        "indexes are reported but never breaking"
+    );
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn a_table_compared_with_itself_reports_nothing() {
+    // The check that catches identity bugs: if constraint matching keyed on
+    // generated names, or normalised a check expression inconsistently, this
+    // is where it shows.
+    let dsn = dsn();
+    setup(&dsn);
+
+    let CatalogAvailability::Available(catalog) = runtime().block_on(read(&dsn, "constrained"))
+    else {
+        panic!("expected a catalog");
+    };
+
+    let changes = catalog::compare(&catalog, &catalog);
+    assert!(changes.is_empty(), "{changes:#?}");
 }
