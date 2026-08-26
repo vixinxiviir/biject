@@ -474,3 +474,36 @@ fn a_table_compared_with_itself_reports_nothing() {
     let changes = catalog::compare(&catalog, &catalog);
     assert!(changes.is_empty(), "{changes:#?}");
 }
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn a_failed_query_says_what_the_server_said() {
+    // `tokio_postgres::Error` renders as the bare string "db error", so every
+    // failure this connector reported used to be indistinguishable from every
+    // other: a mistyped table, a permissions problem and a syntax error all
+    // came out as "Query failed: db error". The server's message is only
+    // reachable through `as_db_error()`.
+    let dsn = dsn();
+    setup(&dsn);
+
+    let load = |query: &str| -> String {
+        let config = parse_source_uri(&dsn, Some(query)).expect("valid dsn");
+        runtime()
+            .block_on(biject::connectors::load_source(&config))
+            .expect_err("this query cannot succeed")
+            .to_string()
+    };
+
+    let missing = load("no_such_table_at_all");
+    assert!(
+        missing.contains("no_such_table_at_all"),
+        "names the relation: {missing}"
+    );
+    assert!(!missing.contains("db error"), "{missing}");
+
+    // A different failure has to read differently, or the message carries no
+    // information even when it is not empty.
+    let syntax = load("SELECT FROM WHERE");
+    assert!(syntax.contains("syntax error"), "{syntax}");
+    assert_ne!(missing, syntax);
+}

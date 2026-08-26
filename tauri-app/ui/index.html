@@ -747,16 +747,25 @@
     </section>
 
     <section id="s-section-metadata" style="display:none">
-      <h3>Column Metadata</h3>
+      <h3>Schema Metadata</h3>
       <table>
-        <thead><tr><th>Column</th><th>Change</th><th>Impact</th></tr></thead>
+        <thead><tr><th>Subject</th><th>Change</th><th>Impact</th></tr></thead>
         <tbody id="s-metadata-body"></tbody>
       </table>
     </section>
 
     <section id="s-section-metadata-gap" style="display:none">
-      <h3>Column Metadata Not Compared</h3>
+      <h3>Schema Metadata Not Compared</h3>
       <ul id="s-metadata-gap-list"></ul>
+    </section>
+
+    <!-- A catalog can be readable and still not expose every kind of rule.
+         Without this, "no check constraints changed" and "check constraints
+         were never read" look identical here, exactly as they would in the
+         CLI without its matching section. -->
+    <section id="s-section-metadata-unread" style="display:none">
+      <h3>Not Compared, Because the Source Cannot Report Them</h3>
+      <ul id="s-metadata-unread-list"></ul>
     </section>
 
     <section id="s-section-renames" style="display:none">
@@ -1227,8 +1236,81 @@
           return `default ${m.from === null ? 'none' : m.from} &rarr; ${m.to === null ? 'none' : m.to}`;
         case 'ordinal':
           return `position ${m.from} &rarr; ${m.to}`;
+        case 'constraint_missing':
+          return `${describeConstraint(m.constraint)} missing from target`;
+        case 'constraint_extra':
+          return `${describeConstraint(m.constraint)} only in target`;
+        case 'index_missing':
+          return `${describeIndex(m.index)} missing from target`;
+        case 'index_extra':
+          return `${describeIndex(m.index)} only in target`;
         default:
           return m.kind;
+      }
+    }
+
+    function describeConstraint(c) {
+      if (!c) return 'constraint';
+      switch (c.kind) {
+        case 'primary_key':
+          return `PRIMARY KEY (${(c.columns || []).join(', ')})`;
+        case 'unique':
+          return `UNIQUE (${(c.columns || []).join(', ')})`;
+        case 'check':
+          return `CHECK ${c.expression || ''}`;
+        default:
+          return c.kind;
+      }
+    }
+
+    function describeIndex(i) {
+      if (!i) return 'index';
+      return `${i.unique ? 'UNIQUE INDEX' : 'INDEX'} (${(i.columns || []).join(', ')})`;
+    }
+
+    // A column change is about a column; a constraint or index change is about
+    // a thing with its own name and no single column to point at.
+    function metadataSubject(m) {
+      if (m.column !== undefined) return m.column;
+      if (m.constraint) return m.constraint.name;
+      if (m.index) return m.index.name;
+      return '';
+    }
+
+    // Mirrors MetadataChange::is_breaking. A rule the target does not enforce
+    // lets it hold data the source could not; the reverse tightens the target,
+    // which breaks writers rather than readers. Indexes are never breaking.
+    function metadataIsBreaking(m) {
+      switch (m.kind) {
+        case 'native_type':
+          return m.impact !== 'widening';
+        case 'nullability':
+          return !!m.now_nullable;
+        case 'constraint_missing':
+          return true;
+        default:
+          return false;
+      }
+    }
+
+    function metadataImpactLabel(m) {
+      if (m.kind === 'native_type') return m.impact || 'unknown';
+      return m.kind.replace(/_/g, ' ');
+    }
+
+    // Matches ConstraintKind's Display impl on the Rust side.
+    function describeConstraintKind(kind) {
+      switch (kind) {
+        case 'primary_key':
+          return 'primary keys';
+        case 'unique':
+          return 'unique constraints';
+        case 'check':
+          return 'check constraints';
+        case 'index':
+          return 'indexes';
+        default:
+          return kind;
       }
     }
 
@@ -1238,6 +1320,8 @@
           return 'file sources have no catalog to read';
         case 'query_not_a_table':
           return 'the query is a SELECT rather than a table reference';
+        case 'table_not_found':
+          return `there is no table named ${availability.table || ''}`;
         case 'failed':
           return `reading the catalog failed: ${availability.reason || ''}`;
         case 'unsupported_engine':
@@ -1280,12 +1364,9 @@
 
       const metadataBody = document.getElementById('s-metadata-body');
       metadataBody.innerHTML = (metadata.changes || []).map(m => {
-        const impact = m.kind === 'native_type' ? (m.impact || 'unknown')
-                     : m.kind.replace('_', ' ');
-        const breaking = (m.kind === 'native_type' && m.impact !== 'widening')
-                      || (m.kind === 'nullability' && m.now_nullable);
-        return `<tr><td>${m.column}</td><td>${describeMetadataChange(m)}</td>
-                <td class="${breaking ? 'impact-breaking' : 'impact-safe'}">${impact}</td></tr>`;
+        const breaking = metadataIsBreaking(m);
+        return `<tr><td>${metadataSubject(m)}</td><td>${describeMetadataChange(m)}</td>
+                <td class="${breaking ? 'impact-breaking' : 'impact-safe'}">${metadataImpactLabel(m)}</td></tr>`;
       }).join('');
       document.getElementById('s-section-metadata').style.display =
         (bothRead && (metadata.changes || []).length) ? '' : 'none';
@@ -1300,6 +1381,19 @@
       const gapList = document.getElementById('s-metadata-gap-list');
       gapList.innerHTML = gaps.map(g => `<li>${g}</li>`).join('');
       document.getElementById('s-section-metadata-gap').style.display = gaps.length ? '' : 'none';
+
+      // Reported whether or not the catalogs were readable: a catalog that was
+      // read can still be missing a whole kind of rule.
+      const unread = [];
+      for (const [side, availability] of [['Source', metadata.source], ['Target', metadata.target]]) {
+        for (const kind of (availability.unread || [])) {
+          unread.push(`${side}: ${describeConstraintKind(kind)}`);
+        }
+      }
+      const unreadList = document.getElementById('s-metadata-unread-list');
+      unreadList.innerHTML = unread.map(u => `<li>${u}</li>`).join('');
+      document.getElementById('s-section-metadata-unread').style.display =
+        unread.length ? '' : 'none';
 
       const renamesBody = document.getElementById('s-renames-body');
       renamesBody.innerHTML = data.rename_suggestions.map(r =>

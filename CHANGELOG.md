@@ -21,6 +21,8 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 - **Constraints are matched on what they do, not what they are called.**
   Engines invent names — `customers_pkey`, `PK__customer__3213E83F` — so
   matching on them would report a difference on nearly every comparison.
+- **The desktop app shows constraints and indexes**, matching the CLI, with
+  its own section for kinds the source could not report.
 - **Kinds a connector cannot read are declared, not assumed absent.** SQLite
   keeps `CHECK` bodies only in the original `CREATE TABLE` text, and MySQL
   before 8.0.16 has no `CHECK_CONSTRAINTS` view at all. Both now say so, and
@@ -53,6 +55,12 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ### Fixed
 
+- **Every PostgreSQL error said "db error" and nothing else.**
+  `tokio_postgres::Error` renders as that bare string; the server's message,
+  detail and hint are only reachable through `as_db_error()`. A mistyped table
+  name, a permissions problem and a syntax error were all reported
+  identically, so no failure could be acted on without a second tool. They now
+  carry what the server actually said.
 - **A table with no rows was read as a table with no columns.** Every
   connector took the column list from the first row returned, so an empty
   result set produced a frame with nothing in it. Comparing anything against

@@ -11,6 +11,34 @@ use tokio_postgres::{types::Type, NoTls};
 /// Columns keep their types. Reading everything as text would make every column a String
 /// series, which silently disables numeric tolerance in `data` and hides every type change
 /// from `schema`, because both sides would compare as text.
+/// Render a PostgreSQL error in a way that says what went wrong.
+///
+/// `tokio_postgres::Error`'s `Display` is the bare string "db error". The
+/// server's actual message, along with its detail and hint, is only reachable
+/// through `as_db_error()`. Passing `Display` through meant every failure this
+/// connector reported was indistinguishable from every other: a mistyped table
+/// name, a permissions problem and a syntax error all surfaced as
+/// "Query failed: db error", which tells a user nothing and cannot be acted on.
+fn describe(error: &tokio_postgres::Error) -> String {
+    let Some(db) = error.as_db_error() else {
+        // A client-side failure — connection, TLS, protocol — whose Display is
+        // informative on its own.
+        return error.to_string();
+    };
+
+    let mut text = db.message().to_string();
+    if let Some(detail) = db.detail() {
+        text.push_str(" (");
+        text.push_str(detail);
+        text.push(')');
+    }
+    if let Some(hint) = db.hint() {
+        text.push_str(" — ");
+        text.push_str(hint);
+    }
+    text
+}
+
 pub async fn load_async(
     host: &str,
     port: u16,
@@ -44,12 +72,12 @@ pub async fn load_async(
     let statement = client
         .prepare(sql.as_str())
         .await
-        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+        .map_err(|e| ConnectorError::QueryFailed(describe(&e)))?;
 
     let rows = client
         .query(&statement, &[])
         .await
-        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+        .map_err(|e| ConnectorError::QueryFailed(describe(&e)))?;
 
     let columns: Vec<(String, Type)> = statement
         .columns()
@@ -271,7 +299,7 @@ async fn load_catalog(
 
     let (client, connection) = tokio_postgres::connect(&connect_str, NoTls)
         .await
-        .map_err(|e| ConnectorError::ConnectionFailed(e.to_string()))?;
+        .map_err(|e| ConnectorError::ConnectionFailed(describe(&e)))?;
     tokio::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("[biject] postgres connection error: {}", e);
@@ -300,7 +328,7 @@ async fn load_catalog(
     let rows = client
         .query(CATALOG_QUERY, &[&schema, &table])
         .await
-        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+        .map_err(|e| ConnectorError::QueryFailed(describe(&e)))?;
 
     if rows.is_empty() {
         return Ok(None);
@@ -344,7 +372,7 @@ async fn load_catalog(
     let constraint_rows = client
         .query(CONSTRAINT_QUERY, &[&schema, &table])
         .await
-        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+        .map_err(|e| ConnectorError::QueryFailed(describe(&e)))?;
 
     let mut constraints = Vec::with_capacity(constraint_rows.len());
     for row in &constraint_rows {
@@ -406,7 +434,7 @@ async fn load_catalog(
     let index_rows = client
         .query(INDEX_QUERY, &[&schema, &table])
         .await
-        .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+        .map_err(|e| ConnectorError::QueryFailed(describe(&e)))?;
 
     let indexes = index_rows
         .iter()
