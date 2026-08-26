@@ -248,21 +248,48 @@ mod sqlserver {
               amount DECIMAL(12,2)
             );";
 
+        // Connecting to a named database, then to the fixture database. The
+        // SQL Server image has no equivalent of POSTGRES_DB or MYSQL_DATABASE,
+        // so unlike the other two engines the database itself has to be
+        // created here. Doing it in the test rather than in a CI step keeps
+        // the suite runnable with nothing but a server and a URL — no sqlcmd
+        // on the machine, no setup step to forget.
         runtime().block_on(async {
-            let mut config = Config::new();
-            config.host(&host);
-            config.port(port.unwrap_or(1433));
-            config.database(&database);
-            config.authentication(AuthMethod::sql_server(&username, &password));
-            config.trust_cert();
+            async fn connect(
+                host: &str,
+                port: u16,
+                database: &str,
+                username: &str,
+                password: &str,
+            ) -> Client<tokio_util::compat::Compat<TcpStream>> {
+                let mut config = Config::new();
+                config.host(host);
+                config.port(port);
+                config.database(database);
+                config.authentication(AuthMethod::sql_server(username, password));
+                config.trust_cert();
 
-            let tcp = TcpStream::connect(config.get_addr())
+                let tcp = TcpStream::connect(config.get_addr())
+                    .await
+                    .expect("connect to SQL Server");
+                tcp.set_nodelay(true).ok();
+                Client::connect(config, tcp.compat_write())
+                    .await
+                    .expect("authenticate")
+            }
+
+            let port = port.unwrap_or(1433);
+
+            let mut master = connect(&host, port, "master", &username, &password).await;
+            master
+                .simple_query(format!(
+                    "IF DB_ID('{database}') IS NULL CREATE DATABASE [{database}]"
+                ))
                 .await
-                .expect("connect to SQL Server");
-            tcp.set_nodelay(true).ok();
-            let mut client = Client::connect(config, tcp.compat_write())
-                .await
-                .expect("authenticate");
+                .expect("create the fixture database");
+            drop(master);
+
+            let mut client = connect(&host, port, &database, &username, &password).await;
             client.simple_query(DDL).await.expect("create fixtures");
         });
     }

@@ -391,11 +391,11 @@ fn export_schema(
 fn schema_csv_rows(result: &SchemaDiffResult) -> Vec<String> {
     use crate::data::csv_escape;
 
-    let row = |category: &str, column: &str, detail: &str, from: &str, to: &str, breaking: bool| {
+    let row = |category: &str, subject: &str, detail: &str, from: &str, to: &str, breaking: bool| {
         format!(
             "{},{},{},{},{},{}",
             csv_escape(category),
-            csv_escape(column),
+            csv_escape(subject),
             csv_escape(detail),
             csv_escape(from),
             csv_escape(to),
@@ -403,7 +403,10 @@ fn schema_csv_rows(result: &SchemaDiffResult) -> Vec<String> {
         )
     };
 
-    let mut rows = vec!["category,column,detail,from,to,breaking".to_string()];
+    // `subject` rather than `column`: a row may be about a column, but it may
+    // equally be about a constraint, an index, or a whole side of the
+    // comparison, and calling that a column was never quite true.
+    let mut rows = vec!["category,subject,detail,from,to,breaking".to_string()];
 
     for column in &result.added {
         rows.push(row("added_column", column, "", "", "", false));
@@ -1055,7 +1058,7 @@ mod export_tests {
             changes: vec![],
         }));
 
-        assert_eq!(rows[0], "category,column,detail,from,to,breaking");
+        assert_eq!(rows[0], "category,subject,detail,from,to,breaking");
         let fields = rows[0].split(',').count();
         for row in &rows[1..] {
             assert_eq!(row.split(',').count(), fields, "ragged row: {row}");

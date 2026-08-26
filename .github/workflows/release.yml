@@ -22,11 +22,18 @@ jobs:
     runs-on: ubuntu-latest
     # A hung step should fail in minutes, not sit until GitHub's six-hour
     # default. A healthy cold run is well under this; a warm one is minutes.
-    timeout-minutes: 45
+    # Raised from 45 when SQL Server joined the services: its image is well
+    # over 2GB and the pull runs before any step does.
+    timeout-minutes: 60
 
     # Every connector defect found in this project was invisible to a passing
     # unit-test suite and obvious against a real database. The integration
     # tests are #[ignore] so they never run by accident; here they always do.
+    #
+    # All three engines run here, not just PostgreSQL. Each connector reads
+    # rules from a different set of system views — pg_constraint and pg_index,
+    # TABLE_CONSTRAINTS with STATISTICS, sys.indexes — and a fixture built by
+    # hand proves nothing about what those views really return.
     services:
       postgres:
         image: postgres:16
@@ -40,6 +47,39 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: bijecttest
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -uroot -ptest"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      # No equivalent of POSTGRES_DB or MYSQL_DATABASE here, so the test
+      # creates its own database on first connection. That keeps the suite
+      # runnable against nothing but a server and a URL — no sqlcmd on the
+      # machine and no setup step to forget.
+      #
+      # More retries than the others: SQL Server takes appreciably longer to
+      # accept connections after the container starts.
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Str0ng!Passw0rd' -C -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
 
     steps:
       - uses: actions/checkout@v4
@@ -108,6 +148,14 @@ jobs:
         env:
           BIJECT_TEST_PG: postgres://postgres:test@localhost:5432/bijecttest
         run: cargo test --frozen --locked --test catalog_postgres -- --ignored
+
+      # These panic rather than skip when their variable is unset, so a
+      # mistyped name here fails the job instead of quietly testing nothing.
+      - name: Test against a real MySQL and SQL Server
+        env:
+          BIJECT_TEST_MYSQL: mysql://root:test@localhost:3306/bijecttest
+          BIJECT_TEST_MSSQL: sqlserver://sa:Str0ng!Passw0rd@localhost:1433/bijecttest
+        run: cargo test --frozen --locked --test catalog_rules -- --ignored
 
       - name: Validate desktop entry
         run: desktop-file-validate packaging/aur/biject.desktop

@@ -112,8 +112,9 @@ Output includes:
 - Columns added in target
 - Columns removed from source
 - Type changes and impact classification (SafePromotion, RiskyConversion, Breaking)
-- Column metadata changes — declared type, nullability and defaults — when both
-  sides are database tables, or a note saying why they could not be read
+- Schema metadata changes — declared type, nullability, defaults, primary
+  keys, unique and check constraints, and indexes — when both sides are
+  database tables, or a note saying why they could not be read
 - Backward and forward compatibility assessment
 
 Options:
@@ -123,9 +124,15 @@ Options:
 - `--format` — `json` for the full result, or `csv` for a flat list of findings
 
 Unlike `data`, `--output` here is the file itself rather than a base name, since
-a schema comparison is a single document. Both formats state when column
+a schema comparison is a single document. Both formats state when schema
 metadata could not be read and why, so an export showing no metadata changes is
 never confused with one where the catalog was never examined.
+
+Constraints are matched on what they do rather than what they are called, since
+engines generate names: the same primary key is `customers_pkey` on PostgreSQL
+and `PK__customer__3213E83F` on SQL Server. Losing a rule the source enforces is
+breaking — the target can then hold data the source could not. A missing index
+is reported but is never breaking, because it is slow rather than wrong.
 
 ### 2. Data Diffing with Primary Keys
 
@@ -378,8 +385,17 @@ biject schema   --source postgres://user:pass@localhost:5432/dev --source-query 
 
 Supported schemes are `postgres://`, `mysql://`, `sqlserver://` and `sqlite://`. Anything else is treated as a CSV path.
 
-**Column metadata is not being compared**  
-Declared types, nullability and defaults come from the database catalog, which needs a table rather than a query, and a connector that can read it. The report always says which of those is missing. PostgreSQL is supported today; MySQL, SQL Server and SQLite say so explicitly until their readers land.
+**Schema metadata is not being compared**  
+Declared types, nullability, defaults, constraints and indexes come from the database catalog, which needs a table rather than a query — an arbitrary `SELECT` has no single table to describe, and a CSV has no catalog at all. The report always says which side is missing and why. All four engines read metadata.
+
+**A kind of constraint is listed as not compared**  
+Not every engine exposes every kind. SQLite keeps `CHECK` bodies only in the original `CREATE TABLE` text, and MySQL before 8.0.16 has no `CHECK_CONSTRAINTS` view. Rather than treat an empty list as "this table has none", the report names the kind and the side that could not read it, and skips comparing that kind entirely.
+
+**Check constraints differ between two engines that look the same**  
+Each server re-renders a `CHECK` body into its own spelling — `(amount > (0)::numeric)` on PostgreSQL, ``(`amount` > 0)`` on MySQL, `([amount]>(0))` on SQL Server. They compare reliably within one engine, not across two. `CREATE UNIQUE INDEX` is likewise a unique *constraint* on MySQL and an *index* on PostgreSQL and SQL Server; each reading is faithful to its own server.
+
+**Foreign keys are not reported**  
+Deliberately. They reference another table, and every comparison here works on one table at a time.
 
 **Type classification seems wrong**  
 Polars infers schema from the first 100 rows. If a CSV column contains mixed types, normalize the input first so the sampled rows reflect the full dataset.

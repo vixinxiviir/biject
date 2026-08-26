@@ -8,7 +8,7 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ---
 
-## [Unreleased]
+## [0.6.0] — 2026-08-26
 
 ### Added
 
@@ -41,6 +41,14 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
   and the `with_` methods rather than a struct literal.
 - **Breaking:** `MetadataChange::column` is now `subject`. A constraint spans
   zero or many columns, so there is not always one to return.
+- **Output says "schema metadata" where it said "column metadata"**, in the
+  CLI and the desktop app, since it now covers more than columns.
+- **Breaking:** the schema CSV's second column is headed `subject`, not
+  `column`. It has never held only column names — a gap row holds `source` or
+  `target` — and it now holds constraint and index names too.
+- **A new CSV row type, `constraints_not_compared`**, one per side and kind
+  that a connector could not read. Anything parsing the CSV should expect it
+  alongside `metadata_not_compared`.
 
 ### Known limits
 
@@ -201,7 +209,7 @@ First tagged release, as `datadiff`. Schema comparison, keyed row diffs, batch
 manifests, schema policies, and a Tauri desktop app with connectors for SQL
 Server, PostgreSQL, MySQL/MariaDB and SQLite.
 
-[Unreleased]: https://github.com/vixinxiviir/biject/compare/v0.5.0...HEAD
+[0.6.0]: https://github.com/vixinxiviir/biject/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vixinxiviir/biject/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vixinxiviir/biject/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vixinxiviir/biject/compare/v0.2.2...v0.3.0
