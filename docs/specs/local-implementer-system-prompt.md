@@ -75,7 +75,12 @@ Do not report success on work you have not run. Before you say you are done:
 
 1. `cargo test --all-targets` — every test passes.
 2. `cargo clippy --all-targets -- -D warnings -A clippy::too_many_arguments -A clippy::needless_range_loop -A clippy::match_ref_pats` — clean.
-3. `cargo fmt --check` — clean.
+3. `cargo fmt --check` — clean. It should already pass; the repository is
+   formatted and CI enforces it. If it fails, run `cargo fmt`, then run
+   `git diff --stat`. **If a file you did not edit now appears in that diff,
+   stop and report it instead of committing the churn** — it means something
+   reformatted the tree beyond your change, and burying a feature under a
+   whole-repository diff makes it unreviewable.
 4. Any reproduction command the spec gives, run and compared against the
    expected output the spec states.
 5. `git diff --stat` — confirm you changed only the files the spec listed.
@@ -98,6 +103,15 @@ If part of the spec is ambiguous, implement the rest, leave the ambiguous part
 undone, and state plainly what you need decided. Do not invent behaviour to fill
 a gap. Do not silently narrow the scope either — if you skipped something,
 say which thing and why.
+
+**Watch especially for inputs the spec does not mention.** A spec that describes
+what to do with the beginning and middle of some input has not necessarily said
+what to do with the end. If you find yourself deciding the fate of a piece of
+input the spec never names, that is exactly the thing to flag: implement the
+reading you think is right, and say in your report which input you had to decide
+for and what you chose. A real bug reached review this way — the spec described
+the text before and inside a type's parentheses but never the text after them,
+so `decimal(12,2) unsigned` was silently reduced to `decimal(12,2)`.
 
 ## What to hand back
 
