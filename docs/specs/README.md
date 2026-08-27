@@ -24,7 +24,24 @@ sitting, it should have been two specs.
 | [0.7-canonical-type-names](0.7-canonical-type-names.md) | Done — landed in `3f3ad84` | — |
 | [0.7a-dialect-and-identifier-quoting](0.7a-dialect-and-identifier-quoting.md) | Ready | — |
 | 0.7b — rendering a canonical type per dialect | Not written | 0.7a, canonical type names |
-| 0.7c — `migrate` emits MySQL and SQL Server DDL | Not written | 0.7a, 0.7b. **Lives in `biject-pro`, the private paid repo — not yet decided whether that is handed out** |
+| 0.7c — `migrate` emits MySQL and SQL Server DDL | Not specced — **not for the local implementer** | 0.7a, 0.7b |
+
+## What the local implementer does and does not get
+
+**The free crate only.** `biject-pro` is the paid half and is worked on
+directly, not handed out as a spec.
+
+The line is not about trust, it is about what a wrong answer costs. A defect in
+the free crate produces a wrong *report*, which a person reads and can argue
+with. A defect in `migrate` produces a wrong *migration script*, which somebody
+runs against a database they care about. A type mapped to the wrong equivalent
+on another engine would be a silent, plausible-looking data loss in a paying
+customer's hands.
+
+That also decides where the dialect knowledge lives. Everything about how an
+engine spells a type or quotes a name goes in the free crate, where it is
+GPL-licensed, reviewable and covered by the open test suite. Only the generation
+of statements is paid.
 
 ## What 0.7 is
 
