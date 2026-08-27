@@ -111,7 +111,12 @@ input the spec never names, that is exactly the thing to flag: implement the
 reading you think is right, and say in your report which input you had to decide
 for and what you chose. A real bug reached review this way — the spec described
 the text before and inside a type's parentheses but never the text after them,
-so `decimal(12,2) unsigned` was silently reduced to `decimal(12,2)`.
+so `decimal(12,2) unsigned` was silently reduced to `decimal(12,2)`. A second
+one reached review the same way: a table of types listed what to do with a
+length like `(50)` but never with the sentinel meaning "unbounded", so
+`char(max)` rendered as `char(18446744073709551615)` — a number written into
+SQL that no engine would accept. Sentinels, empty inputs and absent values are
+where a spec's table most often stops short.
 
 ## What to hand back
 
