@@ -19,12 +19,37 @@ sitting, it should have been two specs.
 
 ## Queue
 
+Order matters only where "depends on" says so. The 0.8 specs are independent of
+the 0.7 ones and of each other, so any of them can be picked up at any time.
+
 | Spec | Status | Depends on |
 | --- | --- | --- |
-| [0.7-canonical-type-names](0.7-canonical-type-names.md) | Done — landed in `3f3ad84` | — |
+| [0.7-canonical-type-names](0.7-canonical-type-names.md) | Done — `3f3ad84` | — |
 | [0.7a-dialect-and-identifier-quoting](0.7a-dialect-and-identifier-quoting.md) | Ready | — |
-| 0.7b — rendering a canonical type per dialect | Not written | 0.7a, canonical type names |
-| 0.7c — `migrate` emits MySQL and SQL Server DDL | Not specced — **not for the local implementer** | 0.7a, 0.7b |
+| [0.7b-render-common-types](0.7b-render-common-types.md) | Ready | 0.7a |
+| [0.7c-render-remaining-types](0.7c-render-remaining-types.md) | Ready | 0.7b |
+| [0.8a-schema-without-downloading-rows](0.8a-schema-without-downloading-rows.md) | Ready | — |
+| [0.8b-policy-rules-for-constraints](0.8b-policy-rules-for-constraints.md) | Ready | — |
+| [0.8c-fail-on-flag](0.8c-fail-on-flag.md) | Ready | — |
+| 0.7d — `migrate` emits MySQL and SQL Server DDL | Not specced — **not for the local implementer** | 0.7a, 0.7b, 0.7c |
+
+### Which to hand out first
+
+**0.8c** is the smallest and touches the least — a good first task for a fresh
+context, or after a break from the codebase.
+
+**0.8a** is the most valuable. `biject schema` currently downloads every row of
+both tables to compare their columns, which makes it unusable against a large
+production table. It is also the only spec in the backlog that authorises
+changes under `src/connectors/`.
+
+**0.7a → 0.7b → 0.7c** must go in that order; each builds on the last. Together
+they finish the free half of multi-dialect output.
+
+### Two specs may edit README.md
+
+0.8b and 0.8c both add user-facing options and say so explicitly. Every other
+spec in the queue leaves it alone, and the standing brief's ban still applies.
 
 ## What the local implementer does and does not get
 
