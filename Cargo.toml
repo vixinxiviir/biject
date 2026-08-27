@@ -17,6 +17,10 @@ exclude = [
     ".github/",
     # Internal planning notes — must never be published
     "*-roadmap.md",
+    # Specifications handed to implementers. Working documents about work not
+    # yet done, which would go stale the moment it is. docs/licensing.md is
+    # deliberately not excluded: that one is for users of the crate.
+    "docs/specs/",
     # Generated attribution for bundled dependencies. Belongs with binaries,
     # not with source: a published snapshot goes stale as soon as a dependency
     # changes, and CI regenerates it for every release.
