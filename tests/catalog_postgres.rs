@@ -517,3 +517,25 @@ fn a_failed_query_says_what_the_server_said() {
     assert!(syntax.contains("syntax error"), "{syntax}");
     assert_ne!(missing, syntax);
 }
+
+#[test]
+#[ignore = "needs a live PostgreSQL server; set BIJECT_TEST_PG"]
+fn a_schema_only_load_matches_a_full_load_on_a_real_server() {
+    let dsn = dsn();
+    setup(&dsn);
+    let config = parse_source_uri(&dsn, Some("dev")).expect("valid dsn");
+    let rt = runtime();
+    let full = rt
+        .block_on(biject::connectors::load_source(&config))
+        .expect("full load");
+    let schema = rt
+        .block_on(biject::connectors::load_schema_only(&config))
+        .expect("schema only load");
+    assert_eq!(
+        full.get_column_names(),
+        schema.get_column_names(),
+        "columns must match"
+    );
+    assert_eq!(full.dtypes(), schema.dtypes(), "dtypes must match");
+    assert_eq!(schema.height(), 0, "schema-only load must be empty");
+}

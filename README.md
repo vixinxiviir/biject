@@ -251,7 +251,11 @@ biject schema \
     { "from": "Float32", "to": "Float64" },
     { "from": "Int32", "to": "Int32" }
   ],
-  "fail_on_breaking": true
+  "fail_on_breaking": true,
+  "require_constraints": ["primary_key", "unique"],
+  "require_primary_key_on": ["tenant_id", "id"],
+  "require_indexes": ["orders_customer_idx"],
+  "forbid_extra_constraints": true
 }
 ```
 
@@ -261,6 +265,18 @@ biject schema \
 - `max_new_columns` — reject if more than N columns are added
 - `allowed_type_changes` — list of type conversions to permit
 - `fail_on_breaking` — if true, exit with error on breaking/risky changes
+- `require_constraints` — constraint kinds that must not be lost (primary_key, unique, check, index)
+- `require_primary_key_on` — columns that must be covered by a primary key, in order
+- `require_indexes` — index or constraint names that must exist on target
+- `forbid_extra_constraints` — fail if target enforces a rule source does not have
+
+Example with primary key requirement:
+
+```json
+{
+  "require_primary_key_on": ["tenant_id", "id"]
+}
+```
 
 ## Output & Exports
 

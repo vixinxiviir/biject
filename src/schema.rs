@@ -162,6 +162,10 @@ struct SchemaPolicy {
     max_new_columns: Option<usize>,
     allowed_type_changes: Option<Vec<AllowedTypeChange>>,
     fail_on_breaking: Option<bool>,
+    require_constraints: Option<Vec<String>>,
+    require_primary_key_on: Option<Vec<String>>,
+    require_indexes: Option<Vec<String>>,
+    forbid_extra_constraints: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,6 +294,7 @@ fn run_schema_diff_inner(
             &removed,
             &type_changes,
             &compatibility,
+            &metadata,
         );
         let passed = violations.is_empty();
         if !violations.is_empty() && policy.fail_on_breaking.unwrap_or(true) {
@@ -343,10 +348,10 @@ pub fn schema_diff(
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
 
     let df1 = rt
-        .block_on(connectors::load_source(&source_config))
+        .block_on(connectors::load_schema_only(&source_config))
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
     let df2 = rt
-        .block_on(connectors::load_source(&target_config))
+        .block_on(connectors::load_schema_only(&target_config))
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
 
     // Reading the catalog never fails the run: every reason it might be
@@ -844,6 +849,19 @@ fn load_policy(path: &str) -> Result<SchemaPolicy> {
     let raw = fs::read_to_string(path)?;
     let policy = serde_json::from_str::<SchemaPolicy>(&raw)
         .map_err(|err| anyhow!("Invalid schema policy JSON at {}: {}", path, err))?;
+    if let Some(constraints) = &policy.require_constraints {
+        for name in constraints {
+            match name.as_str() {
+                "primary_key" | "unique" | "check" | "index" => {}
+                _ => {
+                    return Err(anyhow!(
+                        "Invalid constraint kind '{}' in policy, valid values are: primary_key, unique, check, index",
+                        name
+                    ));
+                }
+            }
+        }
+    }
     Ok(policy)
 }
 
@@ -868,6 +886,7 @@ fn evaluate_policy(
     removed: &[String],
     type_changes: &[TypeChange],
     compatibility: &CompatibilitySummary,
+    metadata: &MetadataReport,
 ) -> Vec<String> {
     let mut violations = Vec::new();
 
@@ -920,6 +939,152 @@ fn evaluate_policy(
 
     if policy.fail_on_breaking.unwrap_or(true) && !compatibility.breaking_reasons.is_empty() {
         violations.push("Compatibility analysis found breaking/risky changes".to_string());
+    }
+
+    // require_constraints
+    if let Some(required_kinds) = &policy.require_constraints {
+        for kind_str in required_kinds {
+            let kind = match kind_str.as_str() {
+                "primary_key" => crate::catalog::ConstraintKind::PrimaryKey,
+                "unique" => crate::catalog::ConstraintKind::Unique,
+                "check" => crate::catalog::ConstraintKind::Check,
+                "index" => crate::catalog::ConstraintKind::Index,
+                _ => continue,
+            };
+            // Unread kinds must not pass silently
+            let source_unread = metadata
+                .source
+                .catalog()
+                .map(|c| c.unread.contains(&kind))
+                .unwrap_or(false);
+            let target_unread = metadata
+                .target
+                .catalog()
+                .map(|c| c.unread.contains(&kind))
+                .unwrap_or(false);
+            if source_unread || target_unread {
+                let side = if source_unread { "source" } else { "target" };
+                violations.push(format!(
+                    "policy requires {} to be preserved, but they could not be read from the {}",
+                    kind, side
+                ));
+                continue;
+            }
+            // Check for missing constraints/indexes
+            if kind == crate::catalog::ConstraintKind::Index {
+                for change in &metadata.changes {
+                    if let crate::catalog::MetadataChange::IndexMissing { index } = change {
+                        violations.push(format!(
+                            "policy requires {} to be preserved, but {} is missing from target",
+                            kind, index
+                        ));
+                    }
+                }
+            } else {
+                for change in &metadata.changes {
+                    if let crate::catalog::MetadataChange::ConstraintMissing { constraint } = change
+                    {
+                        if constraint.kind() == kind {
+                            violations.push(format!(
+                                "policy requires {} to be preserved, but {} is missing from target",
+                                kind, constraint
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // require_primary_key_on
+    if let Some(required_cols) = &policy.require_primary_key_on {
+        if !metadata.target.is_available() {
+            let reason = metadata
+                .target
+                .explain()
+                .unwrap_or_else(|| "unknown".to_string());
+            violations.push(format!(
+                "policy requires a primary key on ({}), but the target's catalog could not be read: {}",
+                required_cols.join(", "),
+                reason
+            ));
+        } else if let Some(catalog) = metadata.target.catalog() {
+            if let Some(pk) = catalog.primary_key() {
+                let pk_cols = pk.columns();
+                if pk_cols != required_cols {
+                    let found = if pk_cols.is_empty() {
+                        "no primary key".to_string()
+                    } else {
+                        format!("PRIMARY KEY ({})", pk_cols.join(", "))
+                    };
+                    violations.push(format!(
+                        "policy requires a primary key on ({}), but target has {}",
+                        required_cols.join(", "),
+                        found
+                    ));
+                }
+            } else {
+                violations.push(format!(
+                    "policy requires a primary key on ({}), but target has no primary key",
+                    required_cols.join(", ")
+                ));
+            }
+        }
+    }
+
+    // require_indexes
+    if let Some(required_names) = &policy.require_indexes {
+        if !metadata.target.is_available() {
+            let reason = metadata
+                .target
+                .explain()
+                .unwrap_or_else(|| "unknown".to_string());
+            for name in required_names {
+                violations.push(format!(
+                    "policy requires an index named {}, and the target's catalog could not be read: {}",
+                    name, reason
+                ));
+            }
+        } else if let Some(catalog) = metadata.target.catalog() {
+            use std::collections::BTreeSet;
+            let constraint_names: BTreeSet<&str> =
+                catalog.constraints.iter().map(|c| c.name()).collect();
+            let index_names: BTreeSet<&str> =
+                catalog.indexes.iter().map(|i| i.name.as_str()).collect();
+            let all_names = constraint_names
+                .union(&index_names)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for name in required_names {
+                if !all_names.contains(name.as_str()) {
+                    violations.push(format!(
+                        "policy requires an index named {}, and target has none",
+                        name
+                    ));
+                }
+            }
+        }
+    }
+
+    // forbid_extra_constraints
+    if policy.forbid_extra_constraints.unwrap_or(false) {
+        for change in &metadata.changes {
+            match change {
+                crate::catalog::MetadataChange::ConstraintExtra { constraint } => {
+                    violations.push(format!(
+                        "policy forbids constraints the source does not have, but target has {}",
+                        constraint
+                    ));
+                }
+                crate::catalog::MetadataChange::IndexExtra { index } => {
+                    violations.push(format!(
+                        "policy forbids constraints the source does not have, but target has {}",
+                        index
+                    ));
+                }
+                _ => {}
+            }
+        }
     }
 
     violations
@@ -1139,5 +1304,439 @@ mod export_tests {
         for row in &rows[1..] {
             assert_eq!(row.split(',').count(), fields, "ragged row: {row}");
         }
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use crate::catalog::{CatalogAvailability, ColumnDef, Constraint, IndexDef, TableCatalog};
+    use std::collections::BTreeSet;
+
+    fn col(name: &str, ordinal: u32) -> ColumnDef {
+        ColumnDef {
+            name: name.to_string(),
+            data_type: "bigint".to_string(),
+            nullable: false,
+            default: None,
+            ordinal,
+        }
+    }
+
+    fn pk(name: &str, columns: &[&str]) -> Constraint {
+        Constraint::PrimaryKey {
+            name: name.to_string(),
+            columns: columns.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn unique(name: &str, columns: &[&str]) -> Constraint {
+        Constraint::Unique {
+            name: name.to_string(),
+            columns: columns.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn idx(name: &str, columns: &[&str], unique: bool) -> IndexDef {
+        IndexDef {
+            name: name.to_string(),
+            columns: columns.iter().map(|s| s.to_string()).collect(),
+            unique,
+        }
+    }
+
+    fn metadata(
+        source: CatalogAvailability,
+        target: CatalogAvailability,
+        changes: Vec<crate::catalog::MetadataChange>,
+    ) -> MetadataReport {
+        MetadataReport {
+            source,
+            target,
+            changes,
+        }
+    }
+
+    #[test]
+    fn a_policy_can_require_a_primary_key_to_survive() {
+        // Source has a primary key, target does not, require_constraints: ["primary_key"] produces one violation naming the key
+        let source_catalog =
+            TableCatalog::new(vec![col("id", 1)]).with_constraints(vec![pk("pk", &["id"])]);
+        let target_catalog = TableCatalog::new(vec![col("id", 1)]);
+        let changes = vec![crate::catalog::MetadataChange::ConstraintMissing {
+            constraint: pk("pk", &["id"]),
+        }];
+        let meta = metadata(
+            CatalogAvailability::Available(source_catalog),
+            CatalogAvailability::Available(target_catalog),
+            changes,
+        );
+        let policy = SchemaPolicy {
+            require_constraints: Some(vec!["primary_key".to_string()]),
+            ..Default::default()
+        };
+        let violations = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta,
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("primary keys"));
+        assert!(violations[0].contains("PRIMARY KEY (id)"));
+    }
+
+    #[test]
+    fn a_required_primary_key_must_be_on_the_named_columns() {
+        let catalog = TableCatalog::new(vec![col("id", 1), col("tenant_id", 2)])
+            .with_constraints(vec![pk("pk", &["id"])]);
+        let meta = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(catalog),
+            vec![],
+        );
+        let policy = SchemaPolicy {
+            require_primary_key_on: Some(vec!["tenant_id".to_string(), "id".to_string()]),
+            ..Default::default()
+        };
+        let violations = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta,
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("policy requires a primary key on (tenant_id, id)"));
+        assert!(violations[0].contains("PRIMARY KEY (id)"));
+    }
+
+    #[test]
+    fn primary_key_column_order_is_part_of_the_requirement() {
+        let catalog = TableCatalog::new(vec![col("id", 1), col("tenant_id", 2)])
+            .with_constraints(vec![pk("pk", &["id", "tenant_id"])]);
+        let meta = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(catalog),
+            vec![],
+        );
+        let policy = SchemaPolicy {
+            require_primary_key_on: Some(vec!["tenant_id".to_string(), "id".to_string()]),
+            ..Default::default()
+        };
+        let violations = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta,
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("policy requires a primary key on (tenant_id, id)"));
+        assert!(violations[0].contains("PRIMARY KEY (id, tenant_id)"));
+    }
+
+    #[test]
+    fn a_named_index_may_be_required_by_name() {
+        let catalog_with = TableCatalog::new(vec![col("id", 1)]).with_indexes(vec![idx(
+            "orders_customer_idx",
+            &["id"],
+            false,
+        )]);
+        let catalog_without = TableCatalog::new(vec![col("id", 1)]);
+        let meta_with = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(catalog_with),
+            vec![],
+        );
+        let meta_without = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(catalog_without),
+            vec![],
+        );
+        let policy = SchemaPolicy {
+            require_indexes: Some(vec!["orders_customer_idx".to_string()]),
+            ..Default::default()
+        };
+        let violations_with = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta_with,
+        );
+        let violations_without = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta_without,
+        );
+        assert!(violations_with.is_empty());
+        assert_eq!(violations_without.len(), 1);
+        assert!(violations_without[0]
+            .contains("policy requires an index named orders_customer_idx, and target has none"));
+    }
+
+    #[test]
+    fn a_required_index_is_found_whether_the_engine_calls_it_a_constraint_or_an_index() {
+        let catalog_constraint = TableCatalog::new(vec![col("id", 1)])
+            .with_constraints(vec![unique("orders_customer_idx", &["id"])]);
+        let catalog_index = TableCatalog::new(vec![col("id", 1)]).with_indexes(vec![idx(
+            "orders_customer_idx",
+            &["id"],
+            true,
+        )]);
+        let meta_constraint = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(catalog_constraint),
+            vec![],
+        );
+        let meta_index = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(catalog_index),
+            vec![],
+        );
+        let policy = SchemaPolicy {
+            require_indexes: Some(vec!["orders_customer_idx".to_string()]),
+            ..Default::default()
+        };
+        let v1 = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta_constraint,
+        );
+        let v2 = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta_index,
+        );
+        assert!(v1.is_empty());
+        assert!(v2.is_empty());
+    }
+
+    #[test]
+    fn extra_constraints_can_be_forbidden() {
+        let change = crate::catalog::MetadataChange::ConstraintExtra {
+            constraint: unique("u", &["legacy_code"]),
+        };
+        let meta = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            vec![change],
+        );
+        let policy = SchemaPolicy {
+            forbid_extra_constraints: Some(true),
+            ..Default::default()
+        };
+        let violations = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta,
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("policy forbids constraints the source does not have, but target has UNIQUE (legacy_code)"));
+
+        let meta_empty = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            vec![],
+        );
+        let violations_empty = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta_empty,
+        );
+        assert!(violations_empty.is_empty());
+    }
+
+    #[test]
+    fn a_rule_that_could_not_be_evaluated_fails_rather_than_passes() {
+        let meta = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::NotADatabase,
+            vec![],
+        );
+        let policy = SchemaPolicy {
+            require_primary_key_on: Some(vec!["id".to_string()]),
+            ..Default::default()
+        };
+        let violations = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta,
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains(
+            "policy requires a primary key on (id), but the target's catalog could not be read"
+        ));
+        assert!(violations[0].contains("file sources have no catalog to read"));
+    }
+
+    #[test]
+    fn a_constraint_kind_the_source_could_not_read_is_not_reported_as_satisfied() {
+        let source = TableCatalog::new(vec![col("id", 1)])
+            .with_unread(vec![crate::catalog::ConstraintKind::Check]);
+        let target = TableCatalog::new(vec![col("id", 1)]);
+        let meta = metadata(
+            CatalogAvailability::Available(source),
+            CatalogAvailability::Available(target),
+            vec![],
+        );
+        let policy = SchemaPolicy {
+            require_constraints: Some(vec!["check".to_string()]),
+            ..Default::default()
+        };
+        let violations = evaluate_policy(
+            &policy,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta,
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("policy requires check constraints to be preserved, but they could not be read from the source"));
+    }
+
+    #[test]
+    fn an_unknown_constraint_kind_is_rejected_when_the_policy_loads() {
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let path = dir.join("policy_bad.json");
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(file, r#"{{"require_constraints":["uniqe"]}}"#).unwrap();
+        let res = load_policy(path.to_str().unwrap());
+        assert!(res.is_err());
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("uniqe"));
+        assert!(err.contains("primary_key"));
+        assert!(err.contains("unique"));
+        assert!(err.contains("check"));
+        assert!(err.contains("index"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_policy_with_none_of_the_new_fields_behaves_exactly_as_before() {
+        let policy = SchemaPolicy {
+            required_columns_source: Some(vec!["a".to_string()]),
+            required_columns_target: Some(vec!["b".to_string()]),
+            forbidden_removals: Some(vec!["c".to_string()]),
+            max_new_columns: Some(0),
+            allowed_type_changes: Some(vec![]),
+            fail_on_breaking: Some(false),
+            ..Default::default()
+        };
+        let meta = metadata(
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            CatalogAvailability::Available(TableCatalog::new(vec![])),
+            vec![],
+        );
+        let source_cols: BTreeSet<String> = ["a".to_string()].into_iter().collect();
+        let target_cols: BTreeSet<String> = ["b".to_string()].into_iter().collect();
+        let violations = evaluate_policy(
+            &policy,
+            &source_cols,
+            &target_cols,
+            &[],
+            &[],
+            &[],
+            &CompatibilitySummary {
+                backward_compatible: true,
+                forward_compatible: true,
+                breaking_reasons: vec![],
+            },
+            &meta,
+        );
+        // No violations for columns present, no new fields active
+        assert!(violations.is_empty());
     }
 }

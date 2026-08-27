@@ -415,6 +415,39 @@ fn normalize_query(query: &str) -> String {
     }
 }
 
+/// Build a zero-row query for schema-only loading.
+fn schema_query(query: &str) -> String {
+    let trimmed = query.trim();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+        format!("SELECT * FROM ({}) AS biject_schema_probe LIMIT 0", trimmed)
+    } else {
+        format!("SELECT * FROM {} LIMIT 0", trimmed)
+    }
+}
+
+/// Load a source's schema without transferring rows.
+pub fn load_schema(path: &str, query: &str) -> Result<DataFrame, ConnectorError> {
+    let trimmed = query.trim();
+    let upper = trimmed.to_uppercase();
+    let is_statement = upper.starts_with("SELECT") || upper.starts_with("WITH");
+    let schema_sql = schema_query(query);
+
+    match load(path, &schema_sql) {
+        Ok(df) => Ok(df),
+        Err(e) => {
+            if is_statement {
+                Err(ConnectorError::QueryFailed(format!(
+                    "{}\nThis was a schema comparison, which wraps the query to avoid transferring rows.\nA query ending in ORDER BY cannot be wrapped on SQL Server. Remove the ORDER BY — a schema comparison does not depend on row order.",
+                    e
+                )))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -617,6 +650,66 @@ mod tests {
     fn bare_table_names_are_wrapped_but_statements_are_not() {
         assert_eq!(normalize_query("customers"), "SELECT * FROM customers");
         assert_eq!(normalize_query("SELECT 1"), "SELECT 1");
+    }
+
+    #[test]
+    fn a_bare_table_becomes_a_zero_row_select() {
+        assert_eq!(schema_query("orders"), "SELECT * FROM orders LIMIT 0");
+    }
+
+    #[test]
+    fn a_statement_is_wrapped_rather_than_appended_to() {
+        let q = "SELECT a FROM t WHERE b > 1";
+        let s = schema_query(q);
+        assert!(s.starts_with("SELECT * FROM ("));
+        assert!(s.ends_with("LIMIT 0"));
+        assert!(s.contains(q));
+    }
+
+    #[test]
+    fn the_subquery_alias_is_present() {
+        let s = schema_query("SELECT id FROM t");
+        assert!(s.contains("AS biject_schema_probe"), "{}", s);
+    }
+
+    #[test]
+    fn a_schema_only_load_returns_the_columns_and_no_rows() {
+        let path = scratch_db(
+            "schema_only_columns",
+            "CREATE TABLE t (id INTEGER, name TEXT);
+             INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c');",
+        );
+        let frame = load_schema(path.to_str().unwrap(), "t").expect("schema only load");
+        assert_eq!(frame.height(), 0);
+        assert_eq!(frame.get_column_names(), vec!["id", "name"]);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_schema_only_load_agrees_with_a_full_load() {
+        let path = scratch_db(
+            "schema_only_agrees",
+            "CREATE TABLE t (id INTEGER, name TEXT); INSERT INTO t VALUES (1, 'a');",
+        );
+        let full = load(path.to_str().unwrap(), "t").expect("full load");
+        let schema_only = load_schema(path.to_str().unwrap(), "t").expect("schema only load");
+        assert_eq!(full.get_column_names(), schema_only.get_column_names());
+        assert_eq!(full.dtypes(), schema_only.dtypes());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_schema_only_load_of_a_query_keeps_the_querys_columns() {
+        let path = scratch_db(
+            "schema_only_query",
+            "CREATE TABLE t (id INTEGER, name TEXT);
+             INSERT INTO t VALUES (1, 'a');",
+        );
+        let frame = load_schema(path.to_str().unwrap(), "SELECT id AS renamed FROM t")
+            .expect("schema only query");
+        assert_eq!(frame.height(), 0);
+        assert_eq!(frame.get_column_names(), vec!["renamed"]);
+        std::fs::remove_file(&path).ok();
     }
 
     // ---- constraints and indexes ------------------------------------------

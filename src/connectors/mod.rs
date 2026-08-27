@@ -196,6 +196,78 @@ pub async fn load_source(config: &SourceConfig) -> Result<DataFrame, ConnectorEr
     }
 }
 
+/// Load a source's shape without transferring its contents.
+///
+/// Returns a DataFrame with the right columns and types and no rows. For a
+/// schema comparison that is everything needed, and it turns a full table scan
+/// into a metadata lookup.
+pub async fn load_schema_only(config: &SourceConfig) -> Result<DataFrame, ConnectorError> {
+    match config {
+        SourceConfig::File { path } => csv::load(path),
+        SourceConfig::SqlServer {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            sqlserver::load_schema_async(
+                host,
+                port.unwrap_or(1433),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
+        }
+        SourceConfig::Postgres {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            postgres::load_schema_async(
+                host,
+                port.unwrap_or(5432),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
+        }
+        SourceConfig::Sqlite { path, query } => {
+            let path = path.clone();
+            let query = query.clone();
+            tokio::task::spawn_blocking(move || sqlite::load_schema(&path, &query))
+                .await
+                .map_err(|e| ConnectorError::QueryFailed(format!("Task join error: {}", e)))?
+        }
+        SourceConfig::Mysql {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            mysql::load_schema_async(
+                host,
+                port.unwrap_or(3306),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
+        }
+    }
+}
+
 /// Read column metadata for a source, if its engine can supply any.
 ///
 /// Never returns an error: every reason metadata might be missing is a variant

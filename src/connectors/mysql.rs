@@ -533,6 +533,46 @@ fn normalize_query(query: &str) -> String {
     }
 }
 
+/// Build a zero-row query for schema-only loading.
+fn schema_query(query: &str) -> String {
+    let trimmed = query.trim();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+        format!("SELECT * FROM ({}) AS biject_schema_probe LIMIT 0", trimmed)
+    } else {
+        format!("SELECT * FROM {} LIMIT 0", trimmed)
+    }
+}
+
+/// Load a source's schema without transferring rows.
+pub async fn load_schema_async(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+    query: &str,
+) -> Result<DataFrame, ConnectorError> {
+    let trimmed = query.trim();
+    let upper = trimmed.to_uppercase();
+    let is_statement = upper.starts_with("SELECT") || upper.starts_with("WITH");
+    let schema_sql = schema_query(query);
+
+    match load_async(host, port, database, username, password, &schema_sql).await {
+        Ok(df) => Ok(df),
+        Err(e) => {
+            if is_statement {
+                Err(ConnectorError::QueryFailed(format!(
+                    "{}\nThis was a schema comparison, which wraps the query to avoid transferring rows.\nA query ending in ORDER BY cannot be wrapped on SQL Server. Remove the ORDER BY — a schema comparison does not depend on row order.",
+                    e
+                )))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,5 +772,25 @@ mod tests {
     fn bare_table_names_are_wrapped_but_statements_are_not() {
         assert_eq!(normalize_query("customers"), "SELECT * FROM customers");
         assert_eq!(normalize_query("SELECT 1"), "SELECT 1");
+    }
+
+    #[test]
+    fn a_bare_table_becomes_a_zero_row_select() {
+        assert_eq!(schema_query("orders"), "SELECT * FROM orders LIMIT 0");
+    }
+
+    #[test]
+    fn a_statement_is_wrapped_rather_than_appended_to() {
+        let q = "SELECT a FROM t WHERE b > 1";
+        let s = schema_query(q);
+        assert!(s.starts_with("SELECT * FROM ("));
+        assert!(s.ends_with("LIMIT 0"));
+        assert!(s.contains(q));
+    }
+
+    #[test]
+    fn the_subquery_alias_is_present() {
+        let s = schema_query("SELECT id FROM t");
+        assert!(s.contains("AS biject_schema_probe"), "{}", s);
     }
 }
