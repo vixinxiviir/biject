@@ -132,6 +132,12 @@ jobs:
       - name: Check Tauri app crate
         run: cargo check --frozen --locked --manifest-path tauri-app/src-tauri/Cargo.toml
 
+      # Cheap, and it keeps the tree formatted now that it has been done once.
+      # Without this the next person to run `cargo fmt` gets a diff across the
+      # whole repository mixed into whatever they were actually changing.
+      - name: Check formatting
+        run: cargo fmt --check
+
       # Denies new lints while grandfathering three that already fire across the
       # existing code. too_many_arguments in particular would mean reshaping
       # public signatures, which is not worth doing for a lint.

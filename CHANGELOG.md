@@ -8,6 +8,25 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **The same type spelled two ways is no longer a breaking change.**
+  `VARCHAR(50)` and `CHARACTER VARYING(50)` are one type, as are `INT` and
+  `INTEGER`, and `DECIMAL` and `NUMERIC`. PostgreSQL's catalog always reports
+  the long spelling, so comparing a PostgreSQL table against one on any other
+  engine reported a false breaking change on every string column and returned
+  `backward compatible: false` for a schema nobody had touched. A declared type
+  is now reduced to a canonical form before comparison, and the report still
+  shows the original text when something genuinely changed.
+
+  Only spellings are folded. `varchar` and `text` remain different, as do
+  MySQL's `DATETIME` and PostgreSQL's `TIMESTAMP` — those are judgements about
+  what an engine means rather than how it spells, and are still out of scope.
+
+---
+
 ## [0.6.0] — 2026-08-26
 
 ### Added
@@ -209,6 +228,7 @@ First tagged release, as `datadiff`. Schema comparison, keyed row diffs, batch
 manifests, schema policies, and a Tauri desktop app with connectors for SQL
 Server, PostgreSQL, MySQL/MariaDB and SQLite.
 
+[Unreleased]: https://github.com/vixinxiviir/biject/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/vixinxiviir/biject/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vixinxiviir/biject/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vixinxiviir/biject/compare/v0.3.0...v0.4.0

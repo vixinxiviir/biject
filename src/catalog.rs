@@ -329,19 +329,19 @@ impl CatalogAvailability {
             CatalogAvailability::Failed { reason } => {
                 Some(format!("reading the catalog failed: {reason}"))
             }
-            CatalogAvailability::UnsupportedEngine { engine } => Some(format!(
-                "{engine} catalog reading is not implemented yet"
-            )),
-            CatalogAvailability::NotRequested => {
-                Some("metadata was not requested".to_string())
+            CatalogAvailability::UnsupportedEngine { engine } => {
+                Some(format!("{engine} catalog reading is not implemented yet"))
             }
+            CatalogAvailability::NotRequested => Some("metadata was not requested".to_string()),
         }
     }
 }
 
 /// How a change of declared type affects something reading the column.
 ///
-/// Only same-family changes are classified. Deciding that `varchar(50)` to
+/// Spellings of the same type are folded together first via canonicalisation,
+/// so `VARCHAR(50)` and `character varying(50)` compare as identical. Only
+/// same-family changes are then classified. Deciding that `varchar(50)` to
 /// `text` is safe requires knowing each engine's type families, which is a
 /// per-dialect equivalence matrix and deliberately out of scope; those stay
 /// `Unknown` and are treated as breaking.
@@ -356,26 +356,25 @@ pub enum TypeImpact {
     Unknown,
 }
 
-/// Sentinel for an unbounded length, such as SQL Server's `varchar(max)`.
-const UNBOUNDED: u64 = u64::MAX;
-
 /// Classify a change between two declared types.
 pub fn classify_type_change(from: &str, to: &str) -> TypeImpact {
-    let (from_base, from_params) = split_type(from);
-    let (to_base, to_params) = split_type(to);
+    let from_c = crate::sqltype::canonical(from);
+    let to_c = crate::sqltype::canonical(to);
 
-    if from_base != to_base || from_params.len() != to_params.len() {
+    if from_c.base != to_c.base || from_c.params.len() != to_c.params.len() {
         return TypeImpact::Unknown;
     }
 
     // Equal parameter counts on the same base: compare position by position.
-    let grew = from_params
+    let grew = from_c
+        .params
         .iter()
-        .zip(&to_params)
+        .zip(&to_c.params)
         .any(|(before, after)| after > before);
-    let shrank = from_params
+    let shrank = from_c
+        .params
         .iter()
-        .zip(&to_params)
+        .zip(&to_c.params)
         .any(|(before, after)| after < before);
 
     match (grew, shrank) {
@@ -385,36 +384,6 @@ pub fn classify_type_change(from: &str, to: &str) -> TypeImpact {
         (true, false) => TypeImpact::Widening,
         (false, false) => TypeImpact::Unknown,
     }
-}
-
-/// Split `varchar(50)` into `("varchar", [50])`.
-///
-/// A non-numeric parameter other than `max` yields no parameters, which forces
-/// `Unknown` rather than a guess.
-fn split_type(declared: &str) -> (String, Vec<u64>) {
-    let trimmed = declared.trim().to_ascii_lowercase();
-    let Some(open) = trimmed.find('(') else {
-        return (trimmed, Vec::new());
-    };
-    let base = trimmed[..open].trim().to_string();
-    let Some(close) = trimmed.rfind(')') else {
-        return (trimmed, Vec::new());
-    };
-
-    let mut params = Vec::new();
-    for part in trimmed[open + 1..close].split(',') {
-        let part = part.trim();
-        if part == "max" {
-            params.push(UNBOUNDED);
-        } else if let Ok(value) = part.parse::<u64>() {
-            params.push(value);
-        } else {
-            // An unparseable parameter means the comparison cannot be trusted.
-            return (base, Vec::new());
-        }
-    }
-
-    (base, params)
 }
 
 /// A change to a column that only the catalog can reveal.
@@ -441,11 +410,7 @@ pub enum MetadataChange {
         to: Option<String>,
     },
     /// Position changed. Rarely meaningful, but `SELECT *` consumers care.
-    Ordinal {
-        column: String,
-        from: u32,
-        to: u32,
-    },
+    Ordinal { column: String, from: u32, to: u32 },
     /// A constraint the source enforces and the target does not.
     ConstraintMissing { constraint: Constraint },
     /// A constraint the target enforces and the source does not.
@@ -537,9 +502,8 @@ impl fmt::Display for MetadataChange {
                 }
             }
             MetadataChange::Default { column, from, to } => {
-                let render = |value: &Option<String>| {
-                    value.clone().unwrap_or_else(|| "none".to_string())
-                };
+                let render =
+                    |value: &Option<String>| value.clone().unwrap_or_else(|| "none".to_string());
                 write!(f, "{column}: default {} -> {}", render(from), render(to))
             }
             MetadataChange::Ordinal { column, from, to } => {
@@ -570,7 +534,9 @@ pub fn compare(source: &TableCatalog, target: &TableCatalog) -> Vec<MetadataChan
             continue;
         };
 
-        if normalize_type(&column.data_type) != normalize_type(&other.data_type) {
+        if crate::sqltype::canonical(&column.data_type)
+            != crate::sqltype::canonical(&other.data_type)
+        {
             changes.push(MetadataChange::NativeType {
                 column: column.name.clone(),
                 from: column.data_type.clone(),
@@ -611,27 +577,28 @@ pub fn compare(source: &TableCatalog, target: &TableCatalog) -> Vec<MetadataChan
     // readable side as missing from the other — a long list of differences
     // that are really one unread pragma. `MetadataReport::unread_constraints`
     // reports the gap instead.
-    let comparable =
-        |kind: ConstraintKind| -> bool { source.reads(kind) && target.reads(kind) };
+    let comparable = |kind: ConstraintKind| -> bool { source.reads(kind) && target.reads(kind) };
 
-    let target_constraints: BTreeSet<_> =
-        target.constraints.iter().map(Constraint::identity).collect();
+    let target_constraints: BTreeSet<_> = target
+        .constraints
+        .iter()
+        .map(Constraint::identity)
+        .collect();
     for constraint in &source.constraints {
-        if comparable(constraint.kind())
-            && !target_constraints.contains(&constraint.identity())
-        {
+        if comparable(constraint.kind()) && !target_constraints.contains(&constraint.identity()) {
             changes.push(MetadataChange::ConstraintMissing {
                 constraint: constraint.clone(),
             });
         }
     }
 
-    let source_constraints: BTreeSet<_> =
-        source.constraints.iter().map(Constraint::identity).collect();
+    let source_constraints: BTreeSet<_> = source
+        .constraints
+        .iter()
+        .map(Constraint::identity)
+        .collect();
     for constraint in &target.constraints {
-        if comparable(constraint.kind())
-            && !source_constraints.contains(&constraint.identity())
-        {
+        if comparable(constraint.kind()) && !source_constraints.contains(&constraint.identity()) {
             changes.push(MetadataChange::ConstraintExtra {
                 constraint: constraint.clone(),
             });
@@ -673,15 +640,6 @@ fn normalize_expression(raw: &str) -> String {
         .trim_end_matches(')')
         .to_ascii_lowercase()
         .replace(' ', "")
-}
-
-/// Fold away spelling differences that are not real type changes.
-///
-/// Catalogs are inconsistent about whitespace and case, and comparing raw
-/// strings would report `CHARACTER VARYING(50)` against
-/// `character varying(50)` as a change.
-fn normalize_type(raw: &str) -> String {
-    raw.trim().to_ascii_lowercase().replace(' ', "")
 }
 
 /// Treat an absent default and an empty one alike, and ignore case.
@@ -790,7 +748,10 @@ mod tests {
 
         let changes = compare(&source, &target);
         assert_eq!(changes.len(), 1);
-        assert!(!changes[0].is_breaking(), "reordering breaks no reader by name");
+        assert!(
+            !changes[0].is_breaking(),
+            "reordering breaks no reader by name"
+        );
         assert_eq!(changes[0].to_string(), "b: position 1 -> 2");
     }
 
@@ -808,10 +769,13 @@ mod tests {
         let target = catalog(vec![column("c", "text", true, Some("''"))]);
 
         let changes = compare(&source, &target);
-        assert_eq!(changes.len(), 3, "type, nullability and default: {changes:?}");
+        assert_eq!(
+            changes.len(),
+            3,
+            "type, nullability and default: {changes:?}"
+        );
         assert!(changes.iter().all(|change| change.subject() == "c"));
     }
-
 
     // ---- native type impact ----
 
@@ -918,9 +882,11 @@ mod tests {
             to: "varchar(200)".to_string(),
             impact: TypeImpact::Widening,
         };
-        assert_eq!(widened.to_string(), "name: varchar(50) -> varchar(200) (widening)");
+        assert_eq!(
+            widened.to_string(),
+            "name: varchar(50) -> varchar(200) (widening)"
+        );
     }
-
 
     #[test]
     fn every_availability_variant_serialises() {
@@ -931,12 +897,20 @@ mod tests {
             CatalogAvailability::Available(TableCatalog::default()),
             CatalogAvailability::NotADatabase,
             CatalogAvailability::QueryNotATable,
-            CatalogAvailability::Failed { reason: "permission denied".into() },
-            CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() },
+            CatalogAvailability::Failed {
+                reason: "permission denied".into(),
+            },
+            CatalogAvailability::UnsupportedEngine {
+                engine: "MySQL".to_string(),
+            },
             CatalogAvailability::NotRequested,
         ] {
             let json = serde_json::to_string(&availability);
-            assert!(json.is_ok(), "{availability:?} did not serialise: {:?}", json.err());
+            assert!(
+                json.is_ok(),
+                "{availability:?} did not serialise: {:?}",
+                json.err()
+            );
         }
     }
 
@@ -954,10 +928,12 @@ mod tests {
             .explain()
             .unwrap()
             .contains("SELECT"));
-        assert!(CatalogAvailability::Failed { reason: "permission denied".into() }
-            .explain()
-            .unwrap()
-            .contains("permission denied"));
+        assert!(CatalogAvailability::Failed {
+            reason: "permission denied".into()
+        }
+        .explain()
+        .unwrap()
+        .contains("permission denied"));
     }
 
     #[test]
@@ -976,12 +952,15 @@ mod tests {
         let reasons = [
             CatalogAvailability::NotADatabase,
             CatalogAvailability::QueryNotATable,
-            CatalogAvailability::Failed { reason: "timeout".into() },
-            CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() },
+            CatalogAvailability::Failed {
+                reason: "timeout".into(),
+            },
+            CatalogAvailability::UnsupportedEngine {
+                engine: "MySQL".to_string(),
+            },
             CatalogAvailability::NotRequested,
         ];
-        let explanations: Vec<String> =
-            reasons.iter().map(|r| r.explain().unwrap()).collect();
+        let explanations: Vec<String> = reasons.iter().map(|r| r.explain().unwrap()).collect();
 
         let unique: std::collections::BTreeSet<&String> = explanations.iter().collect();
         assert_eq!(unique.len(), explanations.len(), "{explanations:?}");
@@ -990,16 +969,20 @@ mod tests {
 
     #[test]
     fn an_unimplemented_connector_names_itself() {
-        let reason = CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() }
-            .explain()
-            .unwrap();
+        let reason = CatalogAvailability::UnsupportedEngine {
+            engine: "MySQL".to_string(),
+        }
+        .explain()
+        .unwrap();
         assert!(reason.contains("MySQL"), "{reason}");
         assert!(reason.contains("not implemented"), "{reason}");
     }
 
     #[test]
     fn a_failure_is_never_mistaken_for_an_absent_catalog() {
-        let failed = CatalogAvailability::Failed { reason: "timeout".into() };
+        let failed = CatalogAvailability::Failed {
+            reason: "timeout".into(),
+        };
         assert!(!failed.is_available());
         assert!(failed.catalog().is_none());
         assert!(failed.explain().is_some(), "the reason must survive");
@@ -1068,18 +1051,16 @@ mod tests {
         // (a, b) and (b, a) forbid the same duplicates but serve different
         // queries, so they are not the same constraint.
         let columns = vec![col("a", 1), col("b", 2)];
-        let source = TableCatalog::new(columns.clone())
-            .with_constraints(vec![pk("k", &["a", "b"])]);
-        let target =
-            TableCatalog::new(columns).with_constraints(vec![pk("k", &["b", "a"])]);
+        let source =
+            TableCatalog::new(columns.clone()).with_constraints(vec![pk("k", &["a", "b"])]);
+        let target = TableCatalog::new(columns).with_constraints(vec![pk("k", &["b", "a"])]);
 
         assert_eq!(compare(&source, &target).len(), 2, "one missing, one extra");
     }
 
     #[test]
     fn a_rule_the_target_does_not_enforce_is_breaking() {
-        let source = TableCatalog::new(one_column())
-            .with_constraints(vec![unique("u", &["id"])]);
+        let source = TableCatalog::new(one_column()).with_constraints(vec![unique("u", &["id"])]);
         let target = TableCatalog::new(one_column());
 
         let changes = compare(&source, &target);
@@ -1099,8 +1080,7 @@ mod tests {
         // A tighter target breaks writers, not readers, and readers are the
         // audience the rest of the tool classifies for.
         let source = TableCatalog::new(one_column());
-        let target = TableCatalog::new(one_column())
-            .with_constraints(vec![unique("u", &["id"])]);
+        let target = TableCatalog::new(one_column()).with_constraints(vec![unique("u", &["id"])]);
 
         let changes = compare(&source, &target);
         assert_eq!(changes.len(), 1);
@@ -1110,8 +1090,7 @@ mod tests {
 
     #[test]
     fn indexes_are_reported_but_never_breaking() {
-        let source =
-            TableCatalog::new(one_column()).with_indexes(vec![index("i", &["id"], false)]);
+        let source = TableCatalog::new(one_column()).with_indexes(vec![index("i", &["id"], false)]);
         let target = TableCatalog::new(one_column());
 
         let changes = compare(&source, &target);
@@ -1127,10 +1106,10 @@ mod tests {
     fn a_check_is_matched_on_its_rule_not_its_spelling() {
         // Engines re-render a CHECK body into their own normal form, so the
         // text that comes back is rarely the text that went in.
-        let source = TableCatalog::new(one_column())
-            .with_constraints(vec![check("a", "(amount > 0)")]);
-        let target = TableCatalog::new(one_column())
-            .with_constraints(vec![check("b", "AMOUNT  >  0")]);
+        let source =
+            TableCatalog::new(one_column()).with_constraints(vec![check("a", "(amount > 0)")]);
+        let target =
+            TableCatalog::new(one_column()).with_constraints(vec![check("b", "AMOUNT  >  0")]);
 
         assert!(compare(&source, &target).is_empty());
     }
@@ -1141,10 +1120,8 @@ mod tests {
         // that were treated as "has none", every check on the other side would
         // be reported as missing and a migration would try to drop rules that
         // are really still there.
-        let source = TableCatalog::new(one_column()).with_constraints(vec![
-            check("a", "amount > 0"),
-            unique("u", &["id"]),
-        ]);
+        let source = TableCatalog::new(one_column())
+            .with_constraints(vec![check("a", "amount > 0"), unique("u", &["id"])]);
         let target = TableCatalog::new(one_column())
             .with_constraints(vec![unique("u2", &["id"])])
             .with_unread(vec![ConstraintKind::Check]);
@@ -1158,14 +1135,16 @@ mod tests {
 
     #[test]
     fn an_unread_kind_only_silences_that_kind() {
-        let source = TableCatalog::new(one_column()).with_constraints(vec![
-            check("a", "amount > 0"),
-            unique("u", &["id"]),
-        ]);
+        let source = TableCatalog::new(one_column())
+            .with_constraints(vec![check("a", "amount > 0"), unique("u", &["id"])]);
         let target = TableCatalog::new(one_column()).with_unread(vec![ConstraintKind::Check]);
 
         let changes = compare(&source, &target);
-        assert_eq!(changes.len(), 1, "the unique is still compared: {changes:?}");
+        assert_eq!(
+            changes.len(),
+            1,
+            "the unique is still compared: {changes:?}"
+        );
         assert!(matches!(
             changes[0],
             MetadataChange::ConstraintMissing {
@@ -1198,5 +1177,44 @@ mod tests {
             serde_json::to_string(change)
                 .unwrap_or_else(|e| panic!("{change:?} must serialise: {e}"));
         }
+    }
+
+    #[test]
+    fn a_type_spelled_differently_is_not_reported_as_a_change() {
+        // PostgreSQL's catalog reports the long spelling, so without this every string
+        // column differs on a cross-engine comparison.
+        let source = catalog(vec![column("name", "VARCHAR(50)", true, None)]);
+        let target = catalog(vec![column("name", "character varying(50)", true, None)]);
+        assert!(compare(&source, &target).is_empty());
+    }
+
+    #[test]
+    fn a_real_type_change_still_reports_the_declared_text() {
+        let source = catalog(vec![column("c", "varchar(50)", true, None)]);
+        let target = catalog(vec![column("c", "varchar(200)", true, None)]);
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 1);
+        match &changes[0] {
+            MetadataChange::NativeType {
+                column,
+                from,
+                to,
+                impact,
+            } => {
+                assert_eq!(column, "c");
+                assert_eq!(from, "varchar(50)");
+                assert_eq!(to, "varchar(200)");
+                assert_eq!(*impact, TypeImpact::Widening);
+            }
+            _ => panic!("expected NativeType"),
+        }
+    }
+
+    #[test]
+    fn widening_is_recognised_across_spellings() {
+        assert_eq!(
+            classify_type_change("varchar(50)", "character varying(200)"),
+            TypeImpact::Widening
+        );
     }
 }
