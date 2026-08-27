@@ -120,8 +120,14 @@ Output includes:
 Options:
 - `--source-query` / `--target-query` — table name or SQL query, required for database URIs
 - `--policy` — path to a JSON schema policy file to assert against
+- `--fail-on` — exit non-zero when changes are found at or above the given severity: `breaking` or `any`
 - `--output` — file to write the comparison to; requires `--format`
 - `--format` — `json` for the full result, or `csv` for a flat list of findings
+
+CI example:
+```bash
+biject schema --source prod.db --source-query orders --target staging.db --target-query orders --fail-on breaking
+```
 
 Unlike `data`, `--output` here is the file itself rather than a base name, since
 a schema comparison is a single document. Both formats state when schema

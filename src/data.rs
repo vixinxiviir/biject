@@ -20,6 +20,13 @@ pub enum ExportFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum FailOn {
+    Any,
+    Breaking,
+}
+
 #[derive(Clone, Debug, ValueEnum)]
 pub enum ManifestFormat {
     Json,

@@ -53,6 +53,13 @@ pub enum Commands {
             help = "Export format: json or csv; requires --output"
         )]
         format: Option<data::ExportFormat>,
+
+        #[arg(
+            long,
+            value_enum,
+            help = "Exit non-zero when the comparison finds changes at or above this severity"
+        )]
+        fail_on: Option<data::FailOn>,
     },
     Data {
         #[arg(short, long)]
@@ -174,6 +181,7 @@ pub fn dispatch(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
             policy,
             output,
             format,
+            fail_on,
         } => {
             // Same both-or-neither rule the data command enforces.
             data::validate_export_args(output.as_deref(), format.as_ref(), false)?;
@@ -185,6 +193,7 @@ pub fn dispatch(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
                 policy.as_deref(),
                 output.as_deref(),
                 format,
+                fail_on,
             )?;
         }
         Commands::Data {
