@@ -201,16 +201,18 @@ impl Dialect {
             }
             "char" => {
                 if ty.params.is_empty() {
-                    Err(UnsupportedType {
-                        dialect: *self,
-                        base: "char".to_string(),
-                        reason: format!(
-                            "`char` needs a length on {}, and none was declared",
-                            self.name()
-                        ),
-                    })
+                    // CHAR with no length means CHAR(1) in the SQL standard and on all four engines.
+                    Ok("char(1)".to_string())
                 } else {
                     let p = ty.params[0];
+                    if p == crate::sqltype::UNBOUNDED {
+                        // char has no unbounded form on any engine
+                        return Err(UnsupportedType {
+                            dialect: *self,
+                            base: "char".to_string(),
+                            reason: format!("`char` has no unbounded form on {}", self.name()),
+                        });
+                    }
                     Ok(format!("char({})", p))
                 }
             }
@@ -263,16 +265,17 @@ impl Dialect {
                 }),
                 Dialect::SqlServer | Dialect::Sqlite => {
                     if ty.params.is_empty() {
-                        Err(UnsupportedType {
-                            dialect: *self,
-                            base: "nchar".to_string(),
-                            reason: format!(
-                                "`nchar` needs a length on {}, and none was declared",
-                                self.name()
-                            ),
-                        })
+                        // NCHAR with no length means NCHAR(1) by standard default
+                        Ok("nchar(1)".to_string())
                     } else {
                         let p = ty.params[0];
+                        if p == crate::sqltype::UNBOUNDED {
+                            return Err(UnsupportedType {
+                                dialect: *self,
+                                base: "nchar".to_string(),
+                                reason: format!("`nchar` has no unbounded form on {}", self.name()),
+                            });
+                        }
                         Ok(format!("nchar({})", p))
                     }
                 }
@@ -280,6 +283,154 @@ impl Dialect {
             "boolean" => match self {
                 Dialect::SqlServer => Ok("bit".to_string()),
                 _ => Ok("boolean".to_string()),
+            },
+            "date" => Ok("date".to_string()),
+            "time" => Ok("time".to_string()),
+            "timetz" => match self {
+                Dialect::Postgres | Dialect::Sqlite => Ok("timetz".to_string()),
+                Dialect::MySql => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "timetz".to_string(),
+                    reason: format!("{} has no `timetz` type", self.name()),
+                }),
+                Dialect::SqlServer => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "timetz".to_string(),
+                    reason: format!("{} has no `timetz` type", self.name()),
+                }),
+            },
+            "timestamp" => {
+                // MySQL TIMESTAMP converts through session zone and stops in 2038, so use DATETIME for a timestamp without zone.
+                // SQL Server timestamp is a row-version counter, not a date.
+                let name = match self {
+                    Dialect::Postgres => "timestamp",
+                    Dialect::MySql => "datetime",
+                    Dialect::SqlServer => "datetime2",
+                    Dialect::Sqlite => "timestamp",
+                };
+                Ok(name.to_string())
+            }
+            "timestamptz" => match self {
+                Dialect::Postgres => Ok("timestamptz".to_string()),
+                Dialect::SqlServer => Ok("datetimeoffset".to_string()),
+                Dialect::Sqlite => Ok("timestamptz".to_string()),
+                Dialect::MySql => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "timestamptz".to_string(),
+                    reason: format!("{} has no faithful timestamptz type", self.name()),
+                }),
+            },
+            "interval" => match self {
+                Dialect::Postgres | Dialect::Sqlite => Ok("interval".to_string()),
+                Dialect::MySql => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "interval".to_string(),
+                    reason: format!("{} has no `interval` type", self.name()),
+                }),
+                Dialect::SqlServer => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "interval".to_string(),
+                    reason: format!("{} has no `interval` type", self.name()),
+                }),
+            },
+            "bytea" => match self {
+                Dialect::Postgres => Ok("bytea".to_string()),
+                Dialect::MySql => Ok("longblob".to_string()),
+                Dialect::SqlServer => Ok("varbinary(max)".to_string()),
+                Dialect::Sqlite => Ok("blob".to_string()),
+            },
+            "varbinary" => {
+                if ty.params.is_empty() {
+                    return Err(UnsupportedType {
+                        dialect: *self,
+                        base: "varbinary".to_string(),
+                        reason: format!("{} requires a length for varbinary", self.name()),
+                    });
+                }
+                let p = ty.params[0];
+                if p == crate::sqltype::UNBOUNDED {
+                    match self {
+                        Dialect::Postgres => Ok("bytea".to_string()),
+                        Dialect::MySql => Ok("longblob".to_string()),
+                        Dialect::SqlServer => Ok("varbinary(max)".to_string()),
+                        Dialect::Sqlite => Ok("blob".to_string()),
+                    }
+                } else {
+                    match self {
+                        Dialect::Postgres => Err(UnsupportedType {
+                            dialect: *self,
+                            base: "varbinary".to_string(),
+                            reason: "PostgreSQL has no fixed-length varbinary; use bytea"
+                                .to_string(),
+                        }),
+                        Dialect::MySql | Dialect::SqlServer | Dialect::Sqlite => {
+                            Ok(format!("varbinary({})", p))
+                        }
+                    }
+                }
+            }
+            "binary" => {
+                if ty.params.is_empty() {
+                    return Err(UnsupportedType {
+                        dialect: *self,
+                        base: "binary".to_string(),
+                        reason: format!("{} requires a length for binary", self.name()),
+                    });
+                }
+                let p = ty.params[0];
+                if p == crate::sqltype::UNBOUNDED {
+                    // binary(max) is not a standard mapping; refuse to avoid sentinel
+                    return Err(UnsupportedType {
+                        dialect: *self,
+                        base: "binary".to_string(),
+                        reason: format!("`binary` has no unbounded form on {}", self.name()),
+                    });
+                }
+                match self {
+                    Dialect::Postgres => Err(UnsupportedType {
+                        dialect: *self,
+                        base: "binary".to_string(),
+                        reason: "PostgreSQL has no fixed-length binary; use bytea".to_string(),
+                    }),
+                    Dialect::MySql | Dialect::SqlServer | Dialect::Sqlite => {
+                        Ok(format!("binary({})", p))
+                    }
+                }
+            }
+            "uuid" => match self {
+                Dialect::Postgres => Ok("uuid".to_string()),
+                Dialect::SqlServer => Ok("uniqueidentifier".to_string()),
+                Dialect::Sqlite => Ok("uuid".to_string()),
+                Dialect::MySql => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "uuid".to_string(),
+                    reason: format!("{} has no `uuid` type", self.name()),
+                }),
+            },
+            "json" => match self {
+                Dialect::Postgres | Dialect::MySql | Dialect::Sqlite => Ok("json".to_string()),
+                Dialect::SqlServer => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "json".to_string(),
+                    reason: format!("{} has no `json` type", self.name()),
+                }),
+            },
+            "jsonb" => match self {
+                Dialect::Postgres => Ok("jsonb".to_string()),
+                _ => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "jsonb".to_string(),
+                    reason: format!("{} has no `jsonb` type", self.name()),
+                }),
+            },
+            "xml" => match self {
+                Dialect::Postgres => Ok("xml".to_string()),
+                Dialect::SqlServer => Ok("xml".to_string()),
+                _ => Err(UnsupportedType {
+                    dialect: *self,
+                    base: "xml".to_string(),
+                    reason: format!("{} has no `xml` type", self.name()),
+                }),
             },
             _ => Err(UnsupportedType {
                 dialect: *self,
@@ -539,5 +690,171 @@ mod tests {
         assert_eq!(err.dialect, Dialect::Postgres);
         assert_eq!(err.base, "tinyint");
         assert!(err.to_string().contains("PostgreSQL"));
+    }
+
+    #[test]
+    fn a_timestamp_without_a_zone_avoids_the_types_that_are_not_one() {
+        use crate::sqltype::canonical;
+        let ty = canonical("timestamp");
+        // MySQL should use datetime, not TIMESTAMP
+        assert_eq!(Dialect::MySql.render_type(&ty).unwrap(), "datetime");
+        // SQL Server should use datetime2, not timestamp (which is a row-version counter) and not datetime
+        let ss = Dialect::SqlServer.render_type(&ty).unwrap();
+        assert_eq!(ss, "datetime2");
+        assert_ne!(ss, "timestamp");
+        assert_ne!(ss, "datetime");
+        // Comment: SQL Server's timestamp is a row-version counter, not a date
+    }
+
+    #[test]
+    fn mysql_gets_no_timestamp_with_a_time_zone() {
+        use crate::sqltype::canonical;
+        let ty = canonical("timestamptz");
+        let err = Dialect::MySql.render_type(&ty).unwrap_err();
+        // MySQL's TIMESTAMP converts through the session zone and stops in 2038, so there is nothing faithful to write
+        assert_eq!(err.base, "timestamptz");
+    }
+
+    #[test]
+    fn an_instant_uses_each_engines_own_type_where_it_has_one() {
+        use crate::sqltype::canonical;
+        let ty = canonical("timestamptz");
+        assert_eq!(Dialect::Postgres.render_type(&ty).unwrap(), "timestamptz");
+        assert_eq!(
+            Dialect::SqlServer.render_type(&ty).unwrap(),
+            "datetimeoffset"
+        );
+    }
+
+    #[test]
+    fn a_zoned_time_of_day_is_refused_where_it_does_not_exist() {
+        use crate::sqltype::canonical;
+        let ty = canonical("timetz");
+        assert!(Dialect::Postgres.render_type(&ty).is_ok());
+        assert!(Dialect::Sqlite.render_type(&ty).is_ok());
+        assert!(Dialect::MySql.render_type(&ty).is_err());
+        assert!(Dialect::SqlServer.render_type(&ty).is_err());
+    }
+
+    #[test]
+    fn an_interval_is_postgres_only() {
+        use crate::sqltype::canonical;
+        let ty = canonical("interval");
+        assert!(Dialect::Postgres.render_type(&ty).is_ok());
+        assert!(Dialect::Sqlite.render_type(&ty).is_ok());
+        assert!(Dialect::MySql.render_type(&ty).is_err());
+        assert!(Dialect::SqlServer.render_type(&ty).is_err());
+    }
+
+    #[test]
+    fn unbounded_binary_maps_cleanly_but_bounded_binary_does_not() {
+        use crate::sqltype::canonical;
+        let unbounded = canonical("varbinary(max)");
+        assert_eq!(Dialect::Postgres.render_type(&unbounded).unwrap(), "bytea");
+        let bounded = canonical("varbinary(50)");
+        // bytea has no length, so a bounded rendering would drop a declared constraint
+        assert!(Dialect::Postgres.render_type(&bounded).is_err());
+    }
+
+    #[test]
+    fn binary_types_use_each_engines_own_name() {
+        use crate::sqltype::canonical;
+        let ty = canonical("bytea");
+        assert_eq!(Dialect::MySql.render_type(&ty).unwrap(), "longblob");
+        assert_eq!(
+            Dialect::SqlServer.render_type(&ty).unwrap(),
+            "varbinary(max)"
+        );
+        assert_eq!(Dialect::Sqlite.render_type(&ty).unwrap(), "blob");
+    }
+
+    #[test]
+    fn a_uuid_is_not_turned_into_a_string() {
+        use crate::sqltype::canonical;
+        let ty = canonical("uuid");
+        let err = Dialect::MySql.render_type(&ty).unwrap_err();
+        // CHAR(36) and BINARY(16) are both real choices and both are a person's call
+        assert_eq!(err.base, "uuid");
+        assert!(!err.to_string().contains("char"));
+        assert!(!err.to_string().contains("binary"));
+    }
+
+    #[test]
+    fn json_is_refused_where_it_is_a_convention_rather_than_a_type() {
+        use crate::sqltype::canonical;
+        let json = canonical("json");
+        assert!(Dialect::SqlServer.render_type(&json).is_err());
+        let jsonb = canonical("jsonb");
+        assert!(Dialect::Postgres.render_type(&jsonb).is_ok());
+        assert!(Dialect::MySql.render_type(&jsonb).is_err());
+        assert!(Dialect::SqlServer.render_type(&jsonb).is_err());
+        assert!(Dialect::Sqlite.render_type(&jsonb).is_err());
+    }
+
+    #[test]
+    fn an_unbounded_length_is_refused_where_the_type_has_no_unbounded_form() {
+        use crate::sqltype::canonical;
+        let char_max = canonical("char(max)");
+        let nchar_max = canonical("nchar(max)");
+        for d in [
+            Dialect::Postgres,
+            Dialect::MySql,
+            Dialect::SqlServer,
+            Dialect::Sqlite,
+        ] {
+            assert!(d.render_type(&char_max).is_err());
+            assert!(d.render_type(&nchar_max).is_err());
+        }
+        // the sentinel is u64::MAX, and printing it produces a number in the DDL rather than an answer
+        for d in [
+            Dialect::Postgres,
+            Dialect::MySql,
+            Dialect::SqlServer,
+            Dialect::Sqlite,
+        ] {
+            let out = d.render_type(&canonical("char(1)"));
+            if let Ok(s) = out {
+                assert!(!s.contains("18446744073709551615"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_bare_char_is_one_character_because_the_standard_says_so() {
+        use crate::sqltype::canonical;
+        let ty = canonical("char");
+        for d in [
+            Dialect::Postgres,
+            Dialect::MySql,
+            Dialect::SqlServer,
+            Dialect::Sqlite,
+        ] {
+            assert_eq!(d.render_type(&ty).unwrap(), "char(1)");
+        }
+        let nty = canonical("nchar");
+        // nchar is supported on SQL Server and SQLite
+        assert_eq!(Dialect::SqlServer.render_type(&nty).unwrap(), "nchar(1)");
+        assert_eq!(Dialect::Sqlite.render_type(&nty).unwrap(), "nchar(1)");
+    }
+
+    #[test]
+    fn sqlite_takes_the_canonical_name_for_everything_but_blobs() {
+        use crate::sqltype::canonical;
+        assert_eq!(
+            Dialect::Sqlite.render_type(&canonical("interval")).unwrap(),
+            "interval"
+        );
+        assert_eq!(
+            Dialect::Sqlite.render_type(&canonical("uuid")).unwrap(),
+            "uuid"
+        );
+        assert_eq!(
+            Dialect::Sqlite.render_type(&canonical("timetz")).unwrap(),
+            "timetz"
+        );
+        assert_eq!(
+            Dialect::Sqlite.render_type(&canonical("bytea")).unwrap(),
+            "blob"
+        );
     }
 }
