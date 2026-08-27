@@ -28,10 +28,12 @@ pub async fn load_async(
         .pass(Some(password));
 
     let pool = Pool::new(Opts::from(opts));
-    let mut conn = pool
-        .get_conn()
-        .await
-        .map_err(|e| ConnectorError::ConnectionFailed(format!("Cannot connect to {}:{}/{}: {}", host, port, database, e)))?;
+    let mut conn = pool.get_conn().await.map_err(|e| {
+        ConnectorError::ConnectionFailed(format!(
+            "Cannot connect to {}:{}/{}: {}",
+            host, port, database, e
+        ))
+    })?;
 
     let sql = normalize_query(query);
 
@@ -45,8 +47,13 @@ pub async fn load_async(
         .columns_ref()
         .iter()
         .map(|c| {
-            let unsigned = c.flags().contains(mysql_async::consts::ColumnFlags::UNSIGNED_FLAG);
-            (c.name_str().into_owned(), column_kind(c.column_type(), unsigned))
+            let unsigned = c
+                .flags()
+                .contains(mysql_async::consts::ColumnFlags::UNSIGNED_FLAG);
+            (
+                c.name_str().into_owned(),
+                column_kind(c.column_type(), unsigned),
+            )
         })
         .collect();
 
@@ -122,7 +129,9 @@ pub(crate) fn column_kind(ty: ColumnType, unsigned: bool) -> ColumnKind {
         MYSQL_TYPE_DOUBLE => ColumnKind::Float64,
         MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => ColumnKind::Decimal,
         MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => ColumnKind::Date,
-        MYSQL_TYPE_DATETIME | MYSQL_TYPE_DATETIME2 | MYSQL_TYPE_TIMESTAMP
+        MYSQL_TYPE_DATETIME
+        | MYSQL_TYPE_DATETIME2
+        | MYSQL_TYPE_TIMESTAMP
         | MYSQL_TYPE_TIMESTAMP2 => ColumnKind::Datetime,
         _ => ColumnKind::Text,
     }
@@ -296,7 +305,9 @@ pub async fn read_catalog(
         Ok(None) => CatalogAvailability::TableNotFound {
             table: format!("{schema}.{table}"),
         },
-        Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
+        Err(err) => CatalogAvailability::Failed {
+            reason: err.to_string(),
+        },
     }
 }
 
@@ -467,13 +478,15 @@ async fn load_catalog(
 
     let columns = rows
         .into_iter()
-        .map(|(name, data_type, is_nullable, default, ordinal)| ColumnDef {
-            name,
-            data_type,
-            nullable: is_nullable.eq_ignore_ascii_case("YES"),
-            default,
-            ordinal,
-        })
+        .map(
+            |(name, data_type, is_nullable, default, ordinal)| ColumnDef {
+                name,
+                data_type,
+                nullable: is_nullable.eq_ignore_ascii_case("YES"),
+                default,
+                ordinal,
+            },
+        )
         .collect();
 
     Ok(Some(
@@ -526,9 +539,18 @@ mod tests {
 
     #[test]
     fn integer_types_respect_the_unsigned_flag() {
-        assert_eq!(column_kind(ColumnType::MYSQL_TYPE_LONG, false), ColumnKind::Int32);
-        assert_eq!(column_kind(ColumnType::MYSQL_TYPE_LONG, true), ColumnKind::UInt32);
-        assert_eq!(column_kind(ColumnType::MYSQL_TYPE_TINY, false), ColumnKind::Int8);
+        assert_eq!(
+            column_kind(ColumnType::MYSQL_TYPE_LONG, false),
+            ColumnKind::Int32
+        );
+        assert_eq!(
+            column_kind(ColumnType::MYSQL_TYPE_LONG, true),
+            ColumnKind::UInt32
+        );
+        assert_eq!(
+            column_kind(ColumnType::MYSQL_TYPE_TINY, false),
+            ColumnKind::Int8
+        );
         assert_eq!(
             column_kind(ColumnType::MYSQL_TYPE_LONGLONG, true),
             ColumnKind::UInt64
@@ -539,9 +561,18 @@ mod tests {
     fn integer_widths_are_kept_distinct() {
         // Collapsing every integer to i64 would hide an INT to BIGINT change,
         // which is exactly the kind of schema drift this tool exists to report.
-        assert_eq!(column_kind(ColumnType::MYSQL_TYPE_TINY, false), ColumnKind::Int8);
-        assert_eq!(column_kind(ColumnType::MYSQL_TYPE_SHORT, false), ColumnKind::Int16);
-        assert_eq!(column_kind(ColumnType::MYSQL_TYPE_LONG, false), ColumnKind::Int32);
+        assert_eq!(
+            column_kind(ColumnType::MYSQL_TYPE_TINY, false),
+            ColumnKind::Int8
+        );
+        assert_eq!(
+            column_kind(ColumnType::MYSQL_TYPE_SHORT, false),
+            ColumnKind::Int16
+        );
+        assert_eq!(
+            column_kind(ColumnType::MYSQL_TYPE_LONG, false),
+            ColumnKind::Int32
+        );
         assert_eq!(
             column_kind(ColumnType::MYSQL_TYPE_LONGLONG, false),
             ColumnKind::Int64
@@ -552,7 +583,10 @@ mod tests {
     fn date_is_distinct_from_datetime() {
         // A DATE to DATETIME change is a real schema change and must not be
         // collapsed into a single type.
-        assert_eq!(column_kind(ColumnType::MYSQL_TYPE_DATE, false), ColumnKind::Date);
+        assert_eq!(
+            column_kind(ColumnType::MYSQL_TYPE_DATE, false),
+            ColumnKind::Date
+        );
         assert_eq!(
             column_kind(ColumnType::MYSQL_TYPE_DATETIME, false),
             ColumnKind::Datetime

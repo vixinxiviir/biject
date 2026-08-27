@@ -221,7 +221,9 @@ fn finds_changes_a_dataframe_comparison_cannot_see() {
     let rendered: Vec<String> = changes.iter().map(|c| c.to_string()).collect();
 
     assert!(
-        rendered.iter().any(|c| c.starts_with("name: character varying(50) -> text")),
+        rendered
+            .iter()
+            .any(|c| c.starts_with("name: character varying(50) -> text")),
         "VARCHAR(50) to TEXT must be visible: {rendered:?}"
     );
     assert!(
@@ -229,7 +231,9 @@ fn finds_changes_a_dataframe_comparison_cannot_see() {
         "{rendered:?}"
     );
     assert!(
-        changes.iter().any(|c| matches!(c, MetadataChange::Default { column, .. } if column == "amount")),
+        changes
+            .iter()
+            .any(|c| matches!(c, MetadataChange::Default { column, .. } if column == "amount")),
         "amount gained a default: {rendered:?}"
     );
 }
@@ -308,10 +312,15 @@ fn comparing_against_an_empty_table_finds_no_differences() {
             .expect("load")
     };
 
-    let diff = biject::schema::run_schema_diff_frames(load("dev"), load("empties"), "dev", "empties")
-        .expect("compare");
+    let diff =
+        biject::schema::run_schema_diff_frames(load("dev"), load("empties"), "dev", "empties")
+            .expect("compare");
 
-    assert!(diff.added.is_empty(), "spurious additions: {:?}", diff.added);
+    assert!(
+        diff.added.is_empty(),
+        "spurious additions: {:?}",
+        diff.added
+    );
     assert!(
         diff.removed.is_empty(),
         "an empty table is not a table missing every column: {:?}",
@@ -381,8 +390,9 @@ fn reads_indexes_without_double_counting_the_ones_backing_constraints() {
         .collect();
 
     assert!(
-        !names.iter().any(|name| name.contains("pkey")
-            || *name == "constrained_email_key"),
+        !names
+            .iter()
+            .any(|name| name.contains("pkey") || *name == "constrained_email_key"),
         "constraint-backing indexes must not be listed again: {names:?}"
     );
     assert_eq!(names.len(), 3, "{names:?}");

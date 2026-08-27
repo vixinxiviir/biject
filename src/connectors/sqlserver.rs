@@ -372,7 +372,9 @@ pub async fn read_catalog(
         Ok(None) => CatalogAvailability::TableNotFound {
             table: format!("{schema}.{table}"),
         },
-        Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
+        Err(err) => CatalogAvailability::Failed {
+            reason: err.to_string(),
+        },
     }
 }
 
@@ -789,7 +791,10 @@ mod tests {
     #[test]
     fn types_without_parameters_stay_bare() {
         assert_eq!(render_declared_type("int", None, None, None, None), "int");
-        assert_eq!(render_declared_type("BIGINT", None, None, None, None), "bigint");
+        assert_eq!(
+            render_declared_type("BIGINT", None, None, None, None),
+            "bigint"
+        );
     }
 
     #[test]
@@ -813,7 +818,10 @@ mod tests {
 
     #[test]
     fn bare_table_names_are_wrapped_but_statements_are_not() {
-        assert_eq!(normalize_query("dbo.customers"), "SELECT * FROM dbo.customers");
+        assert_eq!(
+            normalize_query("dbo.customers"),
+            "SELECT * FROM dbo.customers"
+        );
         assert_eq!(normalize_query("SELECT 1"), "SELECT 1");
         assert_eq!(normalize_query("EXEC sp_help"), "EXEC sp_help");
     }

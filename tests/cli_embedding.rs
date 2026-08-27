@@ -32,15 +32,22 @@ enum ProCommands {
 
 #[test]
 fn free_and_paid_commands_share_one_surface() {
-    let cli = ProCli::try_parse_from(["biject", "schema", "--source", "a.csv", "--target", "b.csv"])
-        .expect("free subcommand should parse");
-    assert!(matches!(cli.command, ProCommands::Free(Commands::Schema { .. })));
+    let cli =
+        ProCli::try_parse_from(["biject", "schema", "--source", "a.csv", "--target", "b.csv"])
+            .expect("free subcommand should parse");
+    assert!(matches!(
+        cli.command,
+        ProCommands::Free(Commands::Schema { .. })
+    ));
 
     let cli = ProCli::try_parse_from([
         "biject", "data", "--source", "a.csv", "--target", "b.csv", "--key", "id",
     ])
     .expect("free data subcommand should parse");
-    assert!(matches!(cli.command, ProCommands::Free(Commands::Data { .. })));
+    assert!(matches!(
+        cli.command,
+        ProCommands::Free(Commands::Data { .. })
+    ));
 
     let cli = ProCli::try_parse_from([
         "biject", "migrate", "--source", "dev", "--target", "prod", "--out", "up.sql",

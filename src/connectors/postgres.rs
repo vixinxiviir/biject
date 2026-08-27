@@ -54,7 +54,12 @@ pub async fn load_async(
 
     let (client, connection) = tokio_postgres::connect(&connect_str, NoTls)
         .await
-        .map_err(|e| ConnectorError::ConnectionFailed(format!("Cannot connect to {}:{}/{}: {}", host, port, database, e)))?;
+        .map_err(|e| {
+            ConnectorError::ConnectionFailed(format!(
+                "Cannot connect to {}:{}/{}: {}",
+                host, port, database, e
+            ))
+        })?;
 
     // The connection object must be driven to completion in a background task.
     tokio::spawn(async move {
@@ -232,10 +237,8 @@ fn build_series(
         }
 
         ColumnKind::Text => {
-            let values: Vec<Option<String>> = rows
-                .iter()
-                .map(|row| read_as_text(row, idx))
-                .collect();
+            let values: Vec<Option<String>> =
+                rows.iter().map(|row| read_as_text(row, idx)).collect();
             Ok(Series::new(name, values))
         }
     }
@@ -279,7 +282,9 @@ pub async fn read_catalog(
         Ok(None) => CatalogAvailability::TableNotFound {
             table: format!("{schema}.{table}"),
         },
-        Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
+        Err(err) => CatalogAvailability::Failed {
+            reason: err.to_string(),
+        },
     }
 }
 
@@ -588,11 +593,11 @@ mod tests {
     #[test]
     fn bare_table_names_are_wrapped_but_statements_are_not() {
         assert_eq!(normalize_query("customers"), "SELECT * FROM customers");
-        assert_eq!(normalize_query("public.orders"), "SELECT * FROM public.orders");
         assert_eq!(
-            normalize_query("SELECT id FROM t"),
-            "SELECT id FROM t"
+            normalize_query("public.orders"),
+            "SELECT * FROM public.orders"
         );
+        assert_eq!(normalize_query("SELECT id FROM t"), "SELECT id FROM t");
         assert_eq!(
             normalize_query("  with x as (select 1) select * from x  "),
             "with x as (select 1) select * from x"

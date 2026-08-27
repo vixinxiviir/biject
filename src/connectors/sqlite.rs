@@ -194,7 +194,9 @@ pub fn read_catalog(path: &str, query: &str) -> CatalogAvailability {
         Ok(None) => CatalogAvailability::TableNotFound {
             table: table.clone(),
         },
-        Err(err) => CatalogAvailability::Failed { reason: err.to_string() },
+        Err(err) => CatalogAvailability::Failed {
+            reason: err.to_string(),
+        },
     }
 }
 
@@ -225,18 +227,21 @@ fn load_catalog(
         let declared: String = row.get(2)?;
         let not_null: i64 = row.get(3)?;
         let key_position: i64 = row.get(5)?;
-        Ok((ColumnDef {
-            name: row.get(1)?,
-            // SQLite keeps the declared type verbatim, including a length, and
-            // will happily store anything regardless. It is still what the
-            // schema says, which is what a comparison is about.
-            data_type: declared,
-            nullable: not_null == 0,
-            default: row.get::<_, Option<String>>(4)?,
-            // cid is 0-based; every other connector reports 1-based, and a
-            // mismatch would show as a spurious reordering on every column.
-            ordinal: (cid + 1) as u32,
-        }, key_position))
+        Ok((
+            ColumnDef {
+                name: row.get(1)?,
+                // SQLite keeps the declared type verbatim, including a length, and
+                // will happily store anything regardless. It is still what the
+                // schema says, which is what a comparison is about.
+                data_type: declared,
+                nullable: not_null == 0,
+                default: row.get::<_, Option<String>>(4)?,
+                // cid is 0-based; every other connector reports 1-based, and a
+                // mismatch would show as a spurious reordering on every column.
+                ordinal: (cid + 1) as u32,
+            },
+            key_position,
+        ))
     };
 
     let with_key_positions: Vec<(ColumnDef, i64)> = match schema {
@@ -465,7 +470,11 @@ mod tests {
         )
         .expect("compare");
 
-        assert!(diff.added.is_empty(), "spurious additions: {:?}", diff.added);
+        assert!(
+            diff.added.is_empty(),
+            "spurious additions: {:?}",
+            diff.added
+        );
         assert!(
             diff.removed.is_empty(),
             "an empty table is not a table missing every column: {:?}",
@@ -588,7 +597,11 @@ mod tests {
 
     #[test]
     fn statements_have_no_single_table_to_describe() {
-        for query in ["SELECT * FROM t", "WITH x AS (SELECT 1) SELECT * FROM x", "SELECT 1;"] {
+        for query in [
+            "SELECT * FROM t",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "SELECT 1;",
+        ] {
             assert_eq!(split_table_reference(query), None, "{query}");
         }
     }
@@ -650,7 +663,12 @@ mod tests {
             .filter(|c| matches!(c, crate::catalog::Constraint::PrimaryKey { .. }))
             .collect();
 
-        assert_eq!(keys.len(), 1, "read exactly once: {:?}", catalog.constraints);
+        assert_eq!(
+            keys.len(),
+            1,
+            "read exactly once: {:?}",
+            catalog.constraints
+        );
         assert_eq!(keys[0].columns(), ["x", "y"]);
         assert!(
             catalog.indexes.is_empty(),
@@ -680,8 +698,7 @@ mod tests {
         assert_eq!(uniques.len(), 1, "{:?}", catalog.constraints);
         assert_eq!(uniques[0].columns(), ["email"]);
 
-        let mut index_names: Vec<&str> =
-            catalog.indexes.iter().map(|i| i.name.as_str()).collect();
+        let mut index_names: Vec<&str> = catalog.indexes.iter().map(|i| i.name.as_str()).collect();
         index_names.sort_unstable();
         assert_eq!(index_names, ["c_multi_idx", "c_region_idx"]);
 
@@ -709,12 +726,16 @@ mod tests {
 
         let catalog = catalog_of(&path, "d");
         assert!(
-            catalog.unread.contains(&crate::catalog::ConstraintKind::Check),
+            catalog
+                .unread
+                .contains(&crate::catalog::ConstraintKind::Check),
             "the gap is declared: {:?}",
             catalog.unread
         );
         assert!(
-            !catalog.unread.contains(&crate::catalog::ConstraintKind::PrimaryKey),
+            !catalog
+                .unread
+                .contains(&crate::catalog::ConstraintKind::PrimaryKey),
             "only checks are unreadable: {:?}",
             catalog.unread
         );

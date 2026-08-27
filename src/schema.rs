@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Result};
 use crate::catalog::{self, CatalogAvailability, ConstraintKind, MetadataChange};
 use crate::connectors;
+use anyhow::{anyhow, Result};
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -194,12 +194,21 @@ pub fn run_schema_diff_frames_with_catalog(
     )
 }
 
-pub fn run_schema_diff_frames(df1: DataFrame, df2: DataFrame, source_label: &str, target_label: &str) -> Result<SchemaDiffResult, SchemaDiffError> {
+pub fn run_schema_diff_frames(
+    df1: DataFrame,
+    df2: DataFrame,
+    source_label: &str,
+    target_label: &str,
+) -> Result<SchemaDiffResult, SchemaDiffError> {
     run_schema_diff_inner(&df1, &df2, source_label, target_label, None, None)
 }
 
 /// Returns structured schema diff data — no terminal output. Used by the GUI and `--json` mode.
-pub fn run_schema_diff(path1: &str, path2: &str, policy_path: Option<&str>) -> Result<SchemaDiffResult, SchemaDiffError> {
+pub fn run_schema_diff(
+    path1: &str,
+    path2: &str,
+    policy_path: Option<&str>,
+) -> Result<SchemaDiffResult, SchemaDiffError> {
     let df1 = CsvReader::from_path(path1)?
         .infer_schema(Some(100))
         .has_header(true)
@@ -232,8 +241,12 @@ fn run_schema_diff_inner(
 
     let mut type_changes = Vec::new();
     for col in source_cols.intersection(&target_cols) {
-        let source_ty = source_schema.get(col).ok_or_else(|| anyhow!("Missing source type for column: {col}"))?;
-        let target_ty = target_schema.get(col).ok_or_else(|| anyhow!("Missing target type for column: {col}"))?;
+        let source_ty = source_schema
+            .get(col)
+            .ok_or_else(|| anyhow!("Missing source type for column: {col}"))?;
+        let target_ty = target_schema
+            .get(col)
+            .ok_or_else(|| anyhow!("Missing target type for column: {col}"))?;
         if source_ty != target_ty {
             type_changes.push(TypeChange {
                 column: col.to_string(),
@@ -244,7 +257,8 @@ fn run_schema_diff_inner(
         }
     }
 
-    let rename_suggestions = detect_rename_suggestions(&removed, &added, &source_schema, &target_schema);
+    let rename_suggestions =
+        detect_rename_suggestions(&removed, &added, &source_schema, &target_schema);
 
     // Absent catalogs are NotRequested rather than any other reason: the caller
     // did not ask, which is different from asking and being unable.
@@ -258,8 +272,7 @@ fn run_schema_diff_inner(
     };
 
     // Computed after the catalog so its findings reach the verdict.
-    let compatibility =
-        summarize_compatibility(&added, &removed, &type_changes, &metadata_changes);
+    let compatibility = summarize_compatibility(&added, &removed, &type_changes, &metadata_changes);
 
     let metadata = MetadataReport {
         source: source_catalog,
@@ -269,10 +282,20 @@ fn run_schema_diff_inner(
 
     let (policy_violations, policy_passed) = if let Some(path) = policy_path {
         let policy = load_policy(path)?;
-        let violations = evaluate_policy(&policy, &source_cols, &target_cols, &added, &removed, &type_changes, &compatibility);
+        let violations = evaluate_policy(
+            &policy,
+            &source_cols,
+            &target_cols,
+            &added,
+            &removed,
+            &type_changes,
+            &compatibility,
+        );
         let passed = violations.is_empty();
         if !violations.is_empty() && policy.fail_on_breaking.unwrap_or(true) {
-            return Err(SchemaDiffError::PolicyViolation("Schema policy violations detected".to_string()));
+            return Err(SchemaDiffError::PolicyViolation(
+                "Schema policy violations detected".to_string(),
+            ));
         }
         (violations, Some(passed))
     } else {
@@ -282,8 +305,14 @@ fn run_schema_diff_inner(
     Ok(SchemaDiffResult {
         source_path: source_label.to_string(),
         target_path: target_label.to_string(),
-        source_schema: source_schema.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        target_schema: target_schema.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        source_schema: source_schema
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        target_schema: target_schema
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         added,
         removed,
         type_changes,
@@ -304,17 +333,20 @@ pub fn schema_diff(
     output: Option<&str>,
     format: Option<crate::data::ExportFormat>,
 ) -> Result<(), SchemaDiffError> {
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| SchemaDiffError::DataLoadError(format!("Failed to create async runtime: {}", e)))?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+        SchemaDiffError::DataLoadError(format!("Failed to create async runtime: {}", e))
+    })?;
 
     let source_config = connectors::parse_source_uri(source, source_query)
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
     let target_config = connectors::parse_source_uri(target, target_query)
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
 
-    let df1 = rt.block_on(connectors::load_source(&source_config))
+    let df1 = rt
+        .block_on(connectors::load_source(&source_config))
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
-    let df2 = rt.block_on(connectors::load_source(&target_config))
+    let df2 = rt
+        .block_on(connectors::load_source(&target_config))
         .map_err(|e| SchemaDiffError::DataLoadError(e.to_string()))?;
 
     // Reading the catalog never fails the run: every reason it might be
@@ -334,8 +366,10 @@ pub fn schema_diff(
 
     if let (Some(path), Some(format)) = (output, format) {
         export_schema(path, format, &result)?;
-        println!("
-Exported schema comparison to: {path}");
+        println!(
+            "
+Exported schema comparison to: {path}"
+        );
     }
 
     Ok(())
@@ -391,17 +425,18 @@ fn export_schema(
 fn schema_csv_rows(result: &SchemaDiffResult) -> Vec<String> {
     use crate::data::csv_escape;
 
-    let row = |category: &str, subject: &str, detail: &str, from: &str, to: &str, breaking: bool| {
-        format!(
-            "{},{},{},{},{},{}",
-            csv_escape(category),
-            csv_escape(subject),
-            csv_escape(detail),
-            csv_escape(from),
-            csv_escape(to),
-            breaking
-        )
-    };
+    let row =
+        |category: &str, subject: &str, detail: &str, from: &str, to: &str, breaking: bool| {
+            format!(
+                "{},{},{},{},{},{}",
+                csv_escape(category),
+                csv_escape(subject),
+                csv_escape(detail),
+                csv_escape(from),
+                csv_escape(to),
+                breaking
+            )
+        };
 
     // `subject` rather than `column`: a row may be about a column, but it may
     // equally be about a constraint, an index, or a whole side of the
@@ -474,19 +509,30 @@ fn render_schema_report(result: &SchemaDiffResult, policy_path: Option<&str>) {
     if result.added.is_empty() {
         println!("No columns added in target.");
     } else {
-        println!("Columns added in target ({}): {:?}", result.added.len(), result.added);
+        println!(
+            "Columns added in target ({}): {:?}",
+            result.added.len(),
+            result.added
+        );
     }
 
     if result.removed.is_empty() {
         println!("No columns removed from source.");
     } else {
-        println!("Columns removed from source ({}): {:?}", result.removed.len(), result.removed);
+        println!(
+            "Columns removed from source ({}): {:?}",
+            result.removed.len(),
+            result.removed
+        );
     }
 
     if result.type_changes.is_empty() {
         println!("No type changes across shared columns.");
     } else {
-        println!("Type changes in shared columns ({}):", result.type_changes.len());
+        println!(
+            "Type changes in shared columns ({}):",
+            result.type_changes.len()
+        );
         for change in &result.type_changes {
             println!(
                 "  - {}: {} -> {} ({:?})",
@@ -510,8 +556,14 @@ fn render_schema_report(result: &SchemaDiffResult, policy_path: Option<&str>) {
     }
 
     println!("Compatibility:");
-    println!("  - Backward compatible: {}", result.compatibility.backward_compatible);
-    println!("  - Forward compatible: {}", result.compatibility.forward_compatible);
+    println!(
+        "  - Backward compatible: {}",
+        result.compatibility.backward_compatible
+    );
+    println!(
+        "  - Forward compatible: {}",
+        result.compatibility.forward_compatible
+    );
     if result.compatibility.breaking_reasons.is_empty() {
         println!("  - Breaking reasons: none");
     } else {
@@ -546,7 +598,11 @@ fn render_metadata(metadata: &MetadataReport) {
         } else {
             println!("Schema metadata changes ({}):", metadata.changes.len());
             for change in &metadata.changes {
-                let marker = if change.is_breaking() { " [breaking]" } else { "" };
+                let marker = if change.is_breaking() {
+                    " [breaking]"
+                } else {
+                    ""
+                };
                 println!("  - {}{}", change, marker);
             }
         }
@@ -653,7 +709,11 @@ fn name_similarity(a: &str, b: &str) -> f64 {
 
     let intersection = a_tokens.intersection(&b_tokens).count() as f64;
     let union = a_tokens.union(&b_tokens).count() as f64;
-    let jaccard = if union > 0.0 { intersection / union } else { 0.0 };
+    let jaccard = if union > 0.0 {
+        intersection / union
+    } else {
+        0.0
+    };
 
     let a_norm = a.to_ascii_lowercase();
     let b_norm = b.to_ascii_lowercase();
@@ -699,7 +759,11 @@ fn detect_rename_suggestions(
         }
     }
 
-    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Greedy one-to-one matching to avoid noisy duplicate suggestions.
     let mut used_source = BTreeSet::new();
@@ -791,9 +855,9 @@ fn type_change_allowed(policy: &SchemaPolicy, source_type: &str, target_type: &s
     let from = normalize_type_name(source_type);
     let to = normalize_type_name(target_type);
 
-    allowed.iter().any(|rule| {
-        normalize_type_name(&rule.from) == from && normalize_type_name(&rule.to) == to
-    })
+    allowed
+        .iter()
+        .any(|rule| normalize_type_name(&rule.from) == from && normalize_type_name(&rule.to) == to)
 }
 
 fn evaluate_policy(
@@ -1002,7 +1066,9 @@ mod export_tests {
         // terminal report and JSON both avoid that ambiguity; CSV must too.
         let rows = schema_csv_rows(&result_with(MetadataReport {
             source: CatalogAvailability::NotADatabase,
-            target: CatalogAvailability::UnsupportedEngine { engine: "MySQL".to_string() },
+            target: CatalogAvailability::UnsupportedEngine {
+                engine: "MySQL".to_string(),
+            },
             changes: vec![],
         }));
 
@@ -1018,8 +1084,12 @@ mod export_tests {
     #[test]
     fn csv_omits_gap_rows_when_both_sides_were_read() {
         let rows = schema_csv_rows(&result_with(MetadataReport {
-            source: CatalogAvailability::Available(TableCatalog::new(vec![column("id", "bigint", false)])),
-            target: CatalogAvailability::Available(TableCatalog::new(vec![column("id", "bigint", false)])),
+            source: CatalogAvailability::Available(TableCatalog::new(vec![column(
+                "id", "bigint", false,
+            )])),
+            target: CatalogAvailability::Available(TableCatalog::new(vec![column(
+                "id", "bigint", false,
+            )])),
             changes: vec![],
         }));
 
@@ -1044,9 +1114,15 @@ mod export_tests {
             ],
         }));
 
-        let nullability = rows.iter().find(|r| r.contains("NOT NULL dropped")).unwrap();
+        let nullability = rows
+            .iter()
+            .find(|r| r.contains("NOT NULL dropped"))
+            .unwrap();
         assert!(nullability.ends_with(",true"), "{nullability}");
-        let default = rows.iter().find(|r| r.contains("default none -> 0")).unwrap();
+        let default = rows
+            .iter()
+            .find(|r| r.contains("default none -> 0"))
+            .unwrap();
         assert!(default.ends_with(",false"), "{default}");
     }
 

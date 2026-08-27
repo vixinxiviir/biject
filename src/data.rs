@@ -1,7 +1,7 @@
+use crate::connectors;
 use anyhow::{anyhow, Result};
 use chrono::Local;
 use clap::ValueEnum;
-use crate::connectors;
 use polars::prelude::*;
 use prettytable::{row, Table};
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,9 @@ impl std::fmt::Display for DataDiffError {
             DataDiffError::MissingKeyColumn(col) => {
                 write!(f, "Missing key column: {} does not exist in data", col)
             }
-            DataDiffError::DataContentError(msg) => write!(f, "Error while processing data: {}", msg),
+            DataDiffError::DataContentError(msg) => {
+                write!(f, "Error while processing data: {}", msg)
+            }
             DataDiffError::FileNotFound(path) => write!(f, "File not found: {}", path),
             DataDiffError::InvalidManifestEntry(msg) => {
                 write!(f, "Invalid manifest entry: {}", msg)
@@ -98,18 +100,24 @@ struct ColumnFilterSet {
 
 impl ColumnFilterSet {
     fn new(exclude: Option<&str>, only: Option<&str>) -> Self {
-    ColumnFilterSet {
-        exclude: parse_column_list(exclude),
-        only: parse_column_list(only),
+        ColumnFilterSet {
+            exclude: parse_column_list(exclude),
+            only: parse_column_list(only),
+        }
     }
-}
 
     fn should_include(&self, col_name: &str, keys: &[String]) -> bool {
-    if keys.contains(&col_name.to_string()) { return false; }
-    if !self.only.is_empty() { return self.only.contains(col_name); }
-    if !self.exclude.is_empty() { return !self.exclude.contains(col_name); }
-    true
-}
+        if keys.contains(&col_name.to_string()) {
+            return false;
+        }
+        if !self.only.is_empty() {
+            return self.only.contains(col_name);
+        }
+        if !self.exclude.is_empty() {
+            return !self.exclude.contains(col_name);
+        }
+        true
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 struct RowSummary {
@@ -256,25 +264,25 @@ fn build_composite_key_column(df: &DataFrame, keys: &[String]) -> Result<Series>
         return Err(anyhow!("No keys specified for composite key"));
     }
 
-     // Build composite keys by efficiently pooling row data
-     let height = df.height();
-     let mut composite_keys: Vec<String> = Vec::with_capacity(height);
- 
-     for row_idx in 0..height {
-         let key_parts: Result<Vec<String>> = keys
-             .iter()
-             .map(|key| {
-                 let col = df.column(key)?;
-                 let val = col.get(row_idx)?;
-                 Ok(val.to_string())
-             })
-             .collect();
-         composite_keys.push(key_parts?.join(COMPOSITE_KEY_SEP));
-     }
- 
-     Ok(Series::new("__keys__", composite_keys))
+    // Build composite keys by efficiently pooling row data
+    let height = df.height();
+    let mut composite_keys: Vec<String> = Vec::with_capacity(height);
+
+    for row_idx in 0..height {
+        let key_parts: Result<Vec<String>> = keys
+            .iter()
+            .map(|key| {
+                let col = df.column(key)?;
+                let val = col.get(row_idx)?;
+                Ok(val.to_string())
+            })
+            .collect();
+        composite_keys.push(key_parts?.join(COMPOSITE_KEY_SEP));
+    }
+
+    Ok(Series::new("__keys__", composite_keys))
 }
- 
+
 /// Build a HashMap of composite keys to row indices.
 ///
 /// Errors if any key value occurs more than once. A keyed diff pairs rows
@@ -333,7 +341,6 @@ fn parse_column_list(columns: Option<&str>) -> HashSet<String> {
     }
 }
 
-
 fn parse_manifest_keys(raw_keys: &str) -> Result<Vec<String>, DataDiffError> {
     let parsed: Vec<String> = raw_keys
         .split(',')
@@ -368,8 +375,6 @@ fn anyvalue_to_f64(value: &polars::prelude::AnyValue<'_>) -> Option<f64> {
         _ => None,
     }
 }
-
-
 
 /// How far two numeric values may differ before they count as changed.
 ///
@@ -496,12 +501,20 @@ pub fn data_diff(
     if let (Some(output_path), Some(export_format)) = (output, format) {
         let export_folder = create_export_folder()?;
         let export_base = export_path_in_folder(&export_folder, output_path);
-        export_diff(export_base.to_str().unwrap(), export_format, &export_payload)?;
+        export_diff(
+            export_base.to_str().unwrap(),
+            export_format,
+            &export_payload,
+        )?;
         println!("\nExported results to: {}", export_folder.display());
     } else if let Some((prompt_path, prompt_format)) = prompt_for_export(source, target)? {
         let export_folder = create_export_folder()?;
         let export_base = export_path_in_folder(&export_folder, &prompt_path);
-        export_diff(export_base.to_str().unwrap(), prompt_format, &export_payload)?;
+        export_diff(
+            export_base.to_str().unwrap(),
+            prompt_format,
+            &export_payload,
+        )?;
         println!("\nExported results to: {}", export_folder.display());
     }
 
@@ -525,11 +538,12 @@ pub fn batch_diff(
     }
 
     let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| anyhow!("Failed to create async runtime: {}", e))?
-;
+        .map_err(|e| anyhow!("Failed to create async runtime: {}", e))?;
     let manifest_entries = read_batch_manifest(manifest_path, manifest_format)?;
     if manifest_entries.is_empty() {
-        return Err(anyhow!("Batch manifest does not contain any source/target pairs"));
+        return Err(anyhow!(
+            "Batch manifest does not contain any source/target pairs"
+        ));
     }
 
     let export_folder = if output.is_some() && format.is_some() {
@@ -568,7 +582,14 @@ pub fn batch_diff(
         let pair_result = (|| -> Result<DiffExport, DataDiffError> {
             let df1 = load_df(&source_label, entry.source_query.as_deref(), &rt)?;
             let df2 = load_df(&target_label, entry.target_query.as_deref(), &rt)?;
-            diff_dataframes(df1, df2, &source_label, &target_label, &pair_keys, &pair_options)
+            diff_dataframes(
+                df1,
+                df2,
+                &source_label,
+                &target_label,
+                &pair_keys,
+                &pair_options,
+            )
         })();
 
         match pair_result {
@@ -587,11 +608,15 @@ pub fn batch_diff(
                         .as_deref()
                         .map(sanitize_file_component)
                         .filter(|value| !value.is_empty())
-                        .unwrap_or_else(|| sanitize_file_component(&format!("{}_{}", output_base, pair_name)));
-                    let pair_base = folder
-                        .join("pairs")
-                        .join(pair_output_base);
-                    export_diff(pair_base.to_str().unwrap(), export_format.clone(), &export_payload)?;
+                        .unwrap_or_else(|| {
+                            sanitize_file_component(&format!("{}_{}", output_base, pair_name))
+                        });
+                    let pair_base = folder.join("pairs").join(pair_output_base);
+                    export_diff(
+                        pair_base.to_str().unwrap(),
+                        export_format.clone(),
+                        &export_payload,
+                    )?;
                 }
 
                 pair_results.push(BatchPairResult {
@@ -604,8 +629,16 @@ pub fn batch_diff(
                     modified_rows: export_payload.row_summary.modified_rows,
                     source_rows: export_payload.row_summary.source_rows,
                     target_rows: export_payload.row_summary.target_rows,
-                    added_columns: export_payload.column_summary.column_presence.added_in_target.len(),
-                    removed_columns: export_payload.column_summary.column_presence.removed_from_source.len(),
+                    added_columns: export_payload
+                        .column_summary
+                        .column_presence
+                        .added_in_target
+                        .len(),
+                    removed_columns: export_payload
+                        .column_summary
+                        .column_presence
+                        .removed_from_source
+                        .len(),
                     error: None,
                 });
             }
@@ -636,7 +669,9 @@ pub fn batch_diff(
     print_batch_pair_summary(&pair_results, diffs_only);
     print_batch_run_summary(&batch_summary);
 
-    if let (Some(output_base), Some(export_format), Some(folder)) = (output, format, export_folder.as_ref()) {
+    if let (Some(output_base), Some(export_format), Some(folder)) =
+        (output, format, export_folder.as_ref())
+    {
         let export_base = export_path_in_folder(folder, output_base);
         let batch_export = BatchExport {
             manifest_path: manifest_path.to_string(),
@@ -691,25 +726,31 @@ fn diff_dataframes(
     // Validate that all key columns exist in both dataframes
     for key in keys {
         if !df1.get_column_names().contains(&key.as_str()) {
-            return Err(DataDiffError::MissingKeyColumn(format!("Key column '{}' not found in source: {}", key, source_label)));
+            return Err(DataDiffError::MissingKeyColumn(format!(
+                "Key column '{}' not found in source: {}",
+                key, source_label
+            )));
         }
         if !df2.get_column_names().contains(&key.as_str()) {
-            return Err(DataDiffError::MissingKeyColumn(format!("Key column '{}' not found in target: {}", key, target_label)));
+            return Err(DataDiffError::MissingKeyColumn(format!(
+                "Key column '{}' not found in target: {}",
+                key, target_label
+            )));
         }
     }
 
-     // Build row index maps using composite keys (optimized with HashMap capacity pre-allocation)
-     let map1: HashMap<String, usize> = build_composite_key_map(&df1, keys, source_label)?;
-     let map2: HashMap<String, usize> = build_composite_key_map(&df2, keys, target_label)?;
- 
-     // Use iterators for efficient set operations without cloning all keys
-     let keys1: HashSet<String> = map1.keys().cloned().collect();
-     let keys2: HashSet<String> = map2.keys().cloned().collect();
- 
-     let mut target_only: Vec<String> = keys2.difference(&keys1).cloned().collect();
-     let mut source_only: Vec<String> = keys1.difference(&keys2).cloned().collect();
-     target_only.sort();
-     source_only.sort();
+    // Build row index maps using composite keys (optimized with HashMap capacity pre-allocation)
+    let map1: HashMap<String, usize> = build_composite_key_map(&df1, keys, source_label)?;
+    let map2: HashMap<String, usize> = build_composite_key_map(&df2, keys, target_label)?;
+
+    // Use iterators for efficient set operations without cloning all keys
+    let keys1: HashSet<String> = map1.keys().cloned().collect();
+    let keys2: HashSet<String> = map2.keys().cloned().collect();
+
+    let mut target_only: Vec<String> = keys2.difference(&keys1).cloned().collect();
+    let mut source_only: Vec<String> = keys1.difference(&keys2).cloned().collect();
+    target_only.sort();
+    source_only.sort();
 
     let cols1: HashSet<String> = df1
         .get_column_names()
@@ -737,40 +778,47 @@ fn diff_dataframes(
         .collect();
     comparable_columns.sort();
 
-     // Optimize: Pre-allocate with estimated capacity for modified rows (~10% of shared)
-     let shared_keys: HashSet<String> = keys1.intersection(&keys2).cloned().collect();
-     let shared_keys_count = shared_keys.len();
-     let mut modified: Vec<String> = Vec::with_capacity(shared_keys_count / 10);
-     let mut changed_column_counts: HashMap<String, usize> = comparable_columns
-         .iter()
-         .cloned()
-         .map(|column| (column, 0usize))
-         .collect();
- 
-     // Optimized loop: only compare shared rows using iterator intersection
-     for key_value in &shared_keys {
-         let left_idx = map1[key_value];
-         let right_idx = map2[key_value];
-         let mut row_changed = false;
- 
-         for column in &comparable_columns {
-             let left_value = df1.column(column)?.get(left_idx).unwrap();
-             let right_value = df2.column(column)?.get(right_idx).unwrap();
- 
-             if !values_equal(&left_value, &right_value, options.numeric_tolerance) {
-                 row_changed = true;
-                 *changed_column_counts.get_mut(column).unwrap() += 1;
-             }
-         }
- 
-         if row_changed {
-             modified.push(key_value.clone());
-         }
-     }
-     modified.sort();
+    // Optimize: Pre-allocate with estimated capacity for modified rows (~10% of shared)
+    let shared_keys: HashSet<String> = keys1.intersection(&keys2).cloned().collect();
+    let shared_keys_count = shared_keys.len();
+    let mut modified: Vec<String> = Vec::with_capacity(shared_keys_count / 10);
+    let mut changed_column_counts: HashMap<String, usize> = comparable_columns
+        .iter()
+        .cloned()
+        .map(|column| (column, 0usize))
+        .collect();
 
-    let shared_keys_count = keys1.len() - source_only.len();  // Shared rows = total in source - source-only
-    let row_summary = build_row_summary(df1.height(), df2.height(), target_only.len(), source_only.len(), modified.len(), shared_keys_count);
+    // Optimized loop: only compare shared rows using iterator intersection
+    for key_value in &shared_keys {
+        let left_idx = map1[key_value];
+        let right_idx = map2[key_value];
+        let mut row_changed = false;
+
+        for column in &comparable_columns {
+            let left_value = df1.column(column)?.get(left_idx).unwrap();
+            let right_value = df2.column(column)?.get(right_idx).unwrap();
+
+            if !values_equal(&left_value, &right_value, options.numeric_tolerance) {
+                row_changed = true;
+                *changed_column_counts.get_mut(column).unwrap() += 1;
+            }
+        }
+
+        if row_changed {
+            modified.push(key_value.clone());
+        }
+    }
+    modified.sort();
+
+    let shared_keys_count = keys1.len() - source_only.len(); // Shared rows = total in source - source-only
+    let row_summary = build_row_summary(
+        df1.height(),
+        df2.height(),
+        target_only.len(),
+        source_only.len(),
+        modified.len(),
+        shared_keys_count,
+    );
     let column_presence = ColumnPresenceSummary {
         added_in_target: added_columns.clone(),
         removed_from_source: removed_columns.clone(),
@@ -785,7 +833,8 @@ fn diff_dataframes(
     } else {
         Vec::new()
     };
-    let change_summary = build_change_summary(&comparable_columns, &changed_column_counts, modified.len());
+    let change_summary =
+        build_change_summary(&comparable_columns, &changed_column_counts, modified.len());
 
     Ok(DiffExport {
         key_columns: keys.to_vec(),
@@ -869,12 +918,21 @@ fn build_change_summary(
         .map(|column| ChangedColumnSummary {
             column: column.clone(),
             changed_rows: *changed_column_counts.get(column).unwrap_or(&0),
-            percent_of_changed_rows: percentage(*changed_column_counts.get(column).unwrap_or(&0), changed_rows),
+            percent_of_changed_rows: percentage(
+                *changed_column_counts.get(column).unwrap_or(&0),
+                changed_rows,
+            ),
         })
         .collect()
 }
 
-fn render_diff_report(path1: &str, path2: &str, keys: &[String], payload: &DiffExport, diffs_only: bool) {
+fn render_diff_report(
+    path1: &str,
+    path2: &str,
+    keys: &[String],
+    payload: &DiffExport,
+    diffs_only: bool,
+) {
     if !diffs_only {
         print_row_summary(path1, path2, &payload.row_summary);
         print_column_presence_summary(path1, path2, &payload.column_summary.column_presence);
@@ -887,12 +945,25 @@ fn render_diff_report(path1: &str, path2: &str, keys: &[String], payload: &DiffE
         print_change_summary(&payload.change_summary);
     }
 
-    print_key_table("Rows only in target", Some(path2), keys, &payload.target_only);
-    print_key_table("Rows only in source", Some(path1), keys, &payload.source_only);
+    print_key_table(
+        "Rows only in target",
+        Some(path2),
+        keys,
+        &payload.target_only,
+    );
+    print_key_table(
+        "Rows only in source",
+        Some(path1),
+        keys,
+        &payload.source_only,
+    );
     print_key_table("Modified rows", None, keys, &payload.modified);
 }
 
-fn read_batch_manifest(path: &str, manifest_format: Option<ManifestFormat>) -> Result<Vec<BatchManifestEntry>> {
+fn read_batch_manifest(
+    path: &str,
+    manifest_format: Option<ManifestFormat>,
+) -> Result<Vec<BatchManifestEntry>> {
     let inferred_format = Path::new(path)
         .extension()
         .and_then(|value| value.to_str())
@@ -919,7 +990,9 @@ fn read_batch_manifest(path: &str, manifest_format: Option<ManifestFormat>) -> R
 }
 
 fn read_batch_manifest_csv(path: &str) -> Result<Vec<BatchManifestEntry>> {
-    let mut reader = csv::ReaderBuilder::new().trim(csv::Trim::All).from_path(path)?;
+    let mut reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_path(path)?;
     let mut entries = Vec::new();
 
     for row in reader.deserialize::<BatchCsvManifestEntry>() {
@@ -977,13 +1050,19 @@ fn build_batch_summary(
     pair_results: &[BatchPairResult],
     aggregated_columns: HashMap<String, usize>,
 ) -> BatchSummary {
-    let succeeded_pairs = pair_results.iter().filter(|result| result.status == "ok").count();
+    let succeeded_pairs = pair_results
+        .iter()
+        .filter(|result| result.status == "ok")
+        .count();
     let failed_pairs = pair_results.len().saturating_sub(succeeded_pairs);
 
     let mut top_changed_columns: Vec<AggregatedChangedColumn> = aggregated_columns
         .into_iter()
         .filter(|(_, changed_rows)| *changed_rows > 0)
-        .map(|(column, changed_rows)| AggregatedChangedColumn { column, changed_rows })
+        .map(|(column, changed_rows)| AggregatedChangedColumn {
+            column,
+            changed_rows,
+        })
         .collect();
     top_changed_columns.sort_by(|left, right| {
         right
@@ -999,11 +1078,20 @@ fn build_batch_summary(
         failed_pairs,
         total_source_rows: pair_results.iter().map(|result| result.source_rows).sum(),
         total_target_rows: pair_results.iter().map(|result| result.target_rows).sum(),
-        total_source_only_rows: pair_results.iter().map(|result| result.source_only_rows).sum(),
-        total_target_only_rows: pair_results.iter().map(|result| result.target_only_rows).sum(),
+        total_source_only_rows: pair_results
+            .iter()
+            .map(|result| result.source_only_rows)
+            .sum(),
+        total_target_only_rows: pair_results
+            .iter()
+            .map(|result| result.target_only_rows)
+            .sum(),
         total_modified_rows: pair_results.iter().map(|result| result.modified_rows).sum(),
         total_added_columns: pair_results.iter().map(|result| result.added_columns).sum(),
-        total_removed_columns: pair_results.iter().map(|result| result.removed_columns).sum(),
+        total_removed_columns: pair_results
+            .iter()
+            .map(|result| result.removed_columns)
+            .sum(),
         top_changed_columns,
     }
 }
@@ -1067,8 +1155,14 @@ fn print_batch_run_summary(summary: &BatchSummary) {
     table.add_row(row!["Failed pairs", summary.failed_pairs]);
     table.add_row(row!["Total source rows", summary.total_source_rows]);
     table.add_row(row!["Total target rows", summary.total_target_rows]);
-    table.add_row(row!["Total source-only rows", summary.total_source_only_rows]);
-    table.add_row(row!["Total target-only rows", summary.total_target_only_rows]);
+    table.add_row(row![
+        "Total source-only rows",
+        summary.total_source_only_rows
+    ]);
+    table.add_row(row![
+        "Total target-only rows",
+        summary.total_target_only_rows
+    ]);
     table.add_row(row!["Total modified rows", summary.total_modified_rows]);
     table.add_row(row!["Total added columns", summary.total_added_columns]);
     table.add_row(row!["Total removed columns", summary.total_removed_columns]);
@@ -1089,7 +1183,12 @@ fn print_row_summary(path1: &str, path2: &str, row_summary: &RowSummary) {
     println!("\nRow-level summary");
     let mut table = Table::new();
     table.add_row(row!["Metric", path1, path2, "Percent"]);
-    table.add_row(row!["Total rows", row_summary.source_rows, row_summary.target_rows, "-"]);
+    table.add_row(row![
+        "Total rows",
+        row_summary.source_rows,
+        row_summary.target_rows,
+        "-"
+    ]);
     table.add_row(row![
         "Rows only in target",
         "-",
@@ -1133,13 +1232,7 @@ fn print_column_summary(label: &str, column_stats: &[ColumnStats]) {
 
     let mut table = Table::new();
     table.add_row(row![
-        "Column",
-        "Type",
-        "Nulls",
-        "Unique",
-        "Min",
-        "Max",
-        "Mean"
+        "Column", "Type", "Nulls", "Unique", "Min", "Max", "Mean"
     ]);
 
     for stats in column_stats {
@@ -1173,7 +1266,12 @@ fn print_change_summary(change_summary: &[ChangedColumnSummary]) {
     table.printstd();
 }
 
-fn print_key_table(title: &str, dataset_label: Option<&str>, keys: &[String], key_values: &[String]) {
+fn print_key_table(
+    title: &str,
+    dataset_label: Option<&str>,
+    keys: &[String],
+    key_values: &[String],
+) {
     if key_values.is_empty() {
         return;
     }
@@ -1182,7 +1280,7 @@ fn print_key_table(title: &str, dataset_label: Option<&str>, keys: &[String], ke
     // Add header with all key columns
     let header_cells: Vec<&str> = keys.iter().map(|k| k.as_str()).collect();
     table.add_row(row![header_cells.join(" | ")]);
-    
+
     // Add rows with composite key values (split by separator for display)
     for composite_key in key_values {
         let parts: Vec<&str> = composite_key.split(COMPOSITE_KEY_SEP).collect();
@@ -1216,7 +1314,7 @@ fn create_export_folder() -> Result<PathBuf> {
     let timestamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
     let folder_name = format!("outputs-{}", timestamp);
     let folder_path = Path::new(&folder_name);
-    
+
     fs::create_dir_all(folder_path)?;
     Ok(folder_path.to_path_buf())
 }
@@ -1250,10 +1348,25 @@ fn export_csv(output_path: &str, payload: &DiffExport) -> Result<()> {
 
     // CSV export uses multiple files so each dataset can keep a single header
     // and flat schema, which is easier to consume downstream than mixed sections.
-    write_key_csv(&csv_output_path(base_path, "target_only"), &payload.key_columns, &payload.target_only)?;
-    write_key_csv(&csv_output_path(base_path, "source_only"), &payload.key_columns, &payload.source_only)?;
-    write_key_csv(&csv_output_path(base_path, "modified"), &payload.key_columns, &payload.modified)?;
-    write_row_summary_csv(&csv_output_path(base_path, "row_summary"), &payload.row_summary)?;
+    write_key_csv(
+        &csv_output_path(base_path, "target_only"),
+        &payload.key_columns,
+        &payload.target_only,
+    )?;
+    write_key_csv(
+        &csv_output_path(base_path, "source_only"),
+        &payload.key_columns,
+        &payload.source_only,
+    )?;
+    write_key_csv(
+        &csv_output_path(base_path, "modified"),
+        &payload.key_columns,
+        &payload.modified,
+    )?;
+    write_row_summary_csv(
+        &csv_output_path(base_path, "row_summary"),
+        &payload.row_summary,
+    )?;
     write_column_stats_csv(
         &csv_output_path(base_path, "column_summary_source"),
         "source",
@@ -1268,15 +1381,24 @@ fn export_csv(output_path: &str, payload: &DiffExport) -> Result<()> {
         &csv_output_path(base_path, "column_presence"),
         &payload.column_summary.column_presence,
     )?;
-    write_change_summary_csv(&csv_output_path(base_path, "change_summary"), &payload.change_summary)?;
+    write_change_summary_csv(
+        &csv_output_path(base_path, "change_summary"),
+        &payload.change_summary,
+    )?;
 
     Ok(())
 }
 
 fn export_batch_csv(output_path: &str, payload: &BatchExport) -> Result<()> {
     let base_path = Path::new(output_path);
-    write_batch_summary_csv(&csv_output_path(base_path, "batch_summary"), &payload.summary)?;
-    write_batch_pair_results_csv(&csv_output_path(base_path, "batch_pairs"), &payload.pair_results)?;
+    write_batch_summary_csv(
+        &csv_output_path(base_path, "batch_summary"),
+        &payload.summary,
+    )?;
+    write_batch_pair_results_csv(
+        &csv_output_path(base_path, "batch_pairs"),
+        &payload.pair_results,
+    )?;
     write_batch_top_columns_csv(
         &csv_output_path(base_path, "batch_top_changed_columns"),
         &payload.summary.top_changed_columns,
@@ -1299,11 +1421,27 @@ fn csv_output_path(base_path: &Path, suffix: &str) -> PathBuf {
 fn write_key_csv(path: &Path, key_columns: &[String], key_values: &[String]) -> Result<()> {
     let mut writer = csv_writer(path)?;
     // Write header with all key column names
-    writeln!(writer, "{}", key_columns.iter().map(|k| csv_escape(k)).collect::<Vec<_>>().join(","))?;
+    writeln!(
+        writer,
+        "{}",
+        key_columns
+            .iter()
+            .map(|k| csv_escape(k))
+            .collect::<Vec<_>>()
+            .join(",")
+    )?;
     // Write rows with composite key values (split by separator for display)
     for composite_key in key_values {
         let parts: Vec<&str> = composite_key.split(COMPOSITE_KEY_SEP).collect();
-        writeln!(writer, "{}", parts.iter().map(|p| csv_escape(p)).collect::<Vec<_>>().join(","))?;
+        writeln!(
+            writer,
+            "{}",
+            parts
+                .iter()
+                .map(|p| csv_escape(p))
+                .collect::<Vec<_>>()
+                .join(",")
+        )?;
     }
     Ok(())
 }
@@ -1336,7 +1474,10 @@ fn write_row_summary_csv(path: &Path, row_summary: &RowSummary) -> Result<()> {
 
 fn write_column_stats_csv(path: &Path, dataset: &str, stats: &[ColumnStats]) -> Result<()> {
     let mut writer = csv_writer(path)?;
-    writeln!(writer, "dataset,column,data_type,null_count,unique_count,min,max,mean")?;
+    writeln!(
+        writer,
+        "dataset,column,data_type,null_count,unique_count,min,max,mean"
+    )?;
     for entry in stats {
         writeln!(
             writer,
@@ -1389,11 +1530,31 @@ fn write_batch_summary_csv(path: &Path, summary: &BatchSummary) -> Result<()> {
     writeln!(writer, "failed_pairs,{}", summary.failed_pairs)?;
     writeln!(writer, "total_source_rows,{}", summary.total_source_rows)?;
     writeln!(writer, "total_target_rows,{}", summary.total_target_rows)?;
-    writeln!(writer, "total_source_only_rows,{}", summary.total_source_only_rows)?;
-    writeln!(writer, "total_target_only_rows,{}", summary.total_target_only_rows)?;
-    writeln!(writer, "total_modified_rows,{}", summary.total_modified_rows)?;
-    writeln!(writer, "total_added_columns,{}", summary.total_added_columns)?;
-    writeln!(writer, "total_removed_columns,{}", summary.total_removed_columns)?;
+    writeln!(
+        writer,
+        "total_source_only_rows,{}",
+        summary.total_source_only_rows
+    )?;
+    writeln!(
+        writer,
+        "total_target_only_rows,{}",
+        summary.total_target_only_rows
+    )?;
+    writeln!(
+        writer,
+        "total_modified_rows,{}",
+        summary.total_modified_rows
+    )?;
+    writeln!(
+        writer,
+        "total_added_columns,{}",
+        summary.total_added_columns
+    )?;
+    writeln!(
+        writer,
+        "total_removed_columns,{}",
+        summary.total_removed_columns
+    )?;
     Ok(())
 }
 
@@ -1428,7 +1589,12 @@ fn write_batch_top_columns_csv(path: &Path, top_columns: &[AggregatedChangedColu
     let mut writer = csv_writer(path)?;
     writeln!(writer, "column,changed_rows")?;
     for entry in top_columns {
-        writeln!(writer, "{},{}", csv_escape(&entry.column), entry.changed_rows)?;
+        writeln!(
+            writer,
+            "{},{}",
+            csv_escape(&entry.column),
+            entry.changed_rows
+        )?;
     }
     Ok(())
 }
@@ -1488,9 +1654,15 @@ fn is_numeric(dtype: &DataType) -> bool {
     )
 }
 
-pub fn validate_export_args(output: Option<&str>, format: Option<&ExportFormat>, temp: bool) -> Result<()> {
+pub fn validate_export_args(
+    output: Option<&str>,
+    format: Option<&ExportFormat>,
+    temp: bool,
+) -> Result<()> {
     if temp && (output.is_some() || format.is_some()) {
-        return Err(anyhow!("--temp cannot be used together with --output or --format"));
+        return Err(anyhow!(
+            "--temp cannot be used together with --output or --format"
+        ));
     }
 
     match (output, format) {
@@ -1632,9 +1804,21 @@ mod tests {
     #[test]
     fn without_tolerance_values_compare_exactly() {
         assert!(values_equal(&AnyValue::Int64(5), &AnyValue::Int64(5), None));
-        assert!(!values_equal(&AnyValue::Int64(5), &AnyValue::Int64(6), None));
-        assert!(values_equal(&AnyValue::String("a"), &AnyValue::String("a"), None));
-        assert!(!values_equal(&AnyValue::String("a"), &AnyValue::String("b"), None));
+        assert!(!values_equal(
+            &AnyValue::Int64(5),
+            &AnyValue::Int64(6),
+            None
+        ));
+        assert!(values_equal(
+            &AnyValue::String("a"),
+            &AnyValue::String("a"),
+            None
+        ));
+        assert!(!values_equal(
+            &AnyValue::String("a"),
+            &AnyValue::String("b"),
+            None
+        ));
     }
 
     #[test]
@@ -1642,7 +1826,11 @@ mod tests {
         assert!(values_equal(&AnyValue::Null, &AnyValue::Null, None));
         assert!(!values_equal(&AnyValue::Null, &AnyValue::Int64(0), None));
         // A null on either side is not numeric, so tolerance must not rescue it.
-        assert!(!values_equal(&AnyValue::Null, &AnyValue::Int64(0), Some(Tolerance::Absolute(100.0))));
+        assert!(!values_equal(
+            &AnyValue::Null,
+            &AnyValue::Int64(0),
+            Some(Tolerance::Absolute(100.0))
+        ));
     }
 
     // ---- values_equal: tolerance is an ABSOLUTE difference ----
@@ -1687,10 +1875,26 @@ mod tests {
 
     #[test]
     fn tolerance_is_symmetric_and_handles_negatives() {
-        assert!(values_equal(&AnyValue::Int64(10), &AnyValue::Int64(8), Some(Tolerance::Absolute(2.0))));
-        assert!(values_equal(&AnyValue::Int64(8), &AnyValue::Int64(10), Some(Tolerance::Absolute(2.0))));
-        assert!(values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-7), Some(Tolerance::Absolute(2.0))));
-        assert!(!values_equal(&AnyValue::Int64(-5), &AnyValue::Int64(-8), Some(Tolerance::Absolute(2.0))));
+        assert!(values_equal(
+            &AnyValue::Int64(10),
+            &AnyValue::Int64(8),
+            Some(Tolerance::Absolute(2.0))
+        ));
+        assert!(values_equal(
+            &AnyValue::Int64(8),
+            &AnyValue::Int64(10),
+            Some(Tolerance::Absolute(2.0))
+        ));
+        assert!(values_equal(
+            &AnyValue::Int64(-5),
+            &AnyValue::Int64(-7),
+            Some(Tolerance::Absolute(2.0))
+        ));
+        assert!(!values_equal(
+            &AnyValue::Int64(-5),
+            &AnyValue::Int64(-8),
+            Some(Tolerance::Absolute(2.0))
+        ));
     }
 
     #[test]
@@ -1703,7 +1907,11 @@ mod tests {
             &AnyValue::Float64(5.0),
             Some(Tolerance::Absolute(0.0))
         ));
-        assert!(!values_equal(&AnyValue::Int64(5), &AnyValue::Float64(5.0), None));
+        assert!(!values_equal(
+            &AnyValue::Int64(5),
+            &AnyValue::Float64(5.0),
+            None
+        ));
     }
 
     #[test]
@@ -1748,7 +1956,11 @@ mod tests {
         // reports every row as modified rather than silently matching.
         let nan = AnyValue::Float64(f64::NAN);
         assert!(!values_equal(&nan, &nan, Some(Tolerance::Absolute(1.0))));
-        assert!(!values_equal(&nan, &AnyValue::Float64(1.0), Some(Tolerance::Absolute(1_000.0))));
+        assert!(!values_equal(
+            &nan,
+            &AnyValue::Float64(1.0),
+            Some(Tolerance::Absolute(1_000.0))
+        ));
     }
 
     // ---- column filtering ----
@@ -1817,7 +2029,10 @@ mod tests {
         let df = frame(&[1, 2, 3], &["a", "b", "c"]);
         let map = build_composite_key_map(&df, &["id".to_string()], "source").unwrap();
         assert_eq!(map.len(), 3);
-        assert_eq!(map.values().copied().collect::<HashSet<_>>(), HashSet::from([0, 1, 2]));
+        assert_eq!(
+            map.values().copied().collect::<HashSet<_>>(),
+            HashSet::from([0, 1, 2])
+        );
     }
 
     #[test]
@@ -1839,9 +2054,18 @@ mod tests {
             .expect_err("duplicate keys must not be accepted");
         let message = err.to_string();
 
-        assert!(message.contains("source"), "names the offending side: {message}");
-        assert!(message.contains("duplicate"), "says what is wrong: {message}");
-        assert!(message.contains("id, date"), "names the key columns: {message}");
+        assert!(
+            message.contains("source"),
+            "names the offending side: {message}"
+        );
+        assert!(
+            message.contains("duplicate"),
+            "says what is wrong: {message}"
+        );
+        assert!(
+            message.contains("id, date"),
+            "names the key columns: {message}"
+        );
     }
 
     #[test]
@@ -1856,7 +2080,10 @@ mod tests {
     fn unique_keys_are_still_accepted() {
         let df = frame(&[1, 2], &["a", "a"]);
         let keys = vec!["id".to_string(), "date".to_string()];
-        assert_eq!(build_composite_key_map(&df, &keys, "source").unwrap().len(), 2);
+        assert_eq!(
+            build_composite_key_map(&df, &keys, "source").unwrap().len(),
+            2
+        );
     }
 
     // ---- proportional tolerance ----
@@ -1901,9 +2128,17 @@ mod tests {
         let tol = Some(Tolerance::Proportional(0.5));
         // Both exactly zero is a match; scaling by the larger magnitude would
         // otherwise divide by zero.
-        assert!(values_equal(&AnyValue::Float64(0.0), &AnyValue::Float64(0.0), tol));
+        assert!(values_equal(
+            &AnyValue::Float64(0.0),
+            &AnyValue::Float64(0.0),
+            tol
+        ));
         // Zero against anything else is a 100% difference.
-        assert!(!values_equal(&AnyValue::Float64(0.0), &AnyValue::Float64(5.0), tol));
+        assert!(!values_equal(
+            &AnyValue::Float64(0.0),
+            &AnyValue::Float64(5.0),
+            tol
+        ));
         assert!(values_equal(
             &AnyValue::Float64(0.0),
             &AnyValue::Float64(5.0),
@@ -1929,7 +2164,11 @@ mod tests {
     #[test]
     fn proportional_tolerance_rejects_nan() {
         let nan = AnyValue::Float64(f64::NAN);
-        assert!(!values_equal(&nan, &nan, Some(Tolerance::Proportional(1.0))));
+        assert!(!values_equal(
+            &nan,
+            &nan,
+            Some(Tolerance::Proportional(1.0))
+        ));
         assert!(!values_equal(
             &nan,
             &AnyValue::Float64(1.0),
@@ -2591,7 +2830,10 @@ mod tests {
     fn a_manifest_missing_a_required_field_is_rejected() {
         let dir = scratch("manifest_invalid");
         let path = write(&dir, "pairs.json", r#"[{"source":"a.csv"}]"#);
-        assert!(read_batch_manifest(&path, None).is_err(), "target is required");
+        assert!(
+            read_batch_manifest(&path, None).is_err(),
+            "target is required"
+        );
 
         let path = write(&dir, "broken.json", "{not json");
         assert!(read_batch_manifest(&path, None).is_err());
@@ -2635,13 +2877,12 @@ mod tests {
         // A CSV manifest saved with a .txt extension would otherwise be parsed
         // as JSON and fail.
         let dir = scratch("manifest_forced");
-        let path = write(
-            &dir,
-            "pairs.txt",
-            "name,source,target\nfirst,a.csv,b.csv\n",
-        );
+        let path = write(&dir, "pairs.txt", "name,source,target\nfirst,a.csv,b.csv\n");
 
-        assert!(read_batch_manifest(&path, None).is_err(), "inferred as JSON");
+        assert!(
+            read_batch_manifest(&path, None).is_err(),
+            "inferred as JSON"
+        );
         let entries = read_batch_manifest(&path, Some(ManifestFormat::Csv)).unwrap();
         assert_eq!(entries[0].source, "a.csv");
 
@@ -2696,7 +2937,10 @@ mod tests {
         // a traversal prefix collapses away entirely rather than becoming "___".
         assert_eq!(sanitize_file_component("a/b"), "a_b");
         assert_eq!(sanitize_file_component("../etc/passwd"), "etc_passwd");
-        assert_eq!(sanitize_file_component("..\\windows\\system32"), "windows_system32");
+        assert_eq!(
+            sanitize_file_component("..\\windows\\system32"),
+            "windows_system32"
+        );
         assert_eq!(sanitize_file_component("with space"), "with_space");
         assert_eq!(sanitize_file_component("keep-_09"), "keep-_09");
     }

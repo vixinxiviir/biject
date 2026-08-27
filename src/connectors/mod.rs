@@ -1,9 +1,9 @@
 pub mod csv;
-pub mod sqlserver;
-pub mod postgres;
-pub mod sqlite;
 pub mod mysql;
+pub mod postgres;
 pub mod profiles;
+pub mod sqlite;
+pub mod sqlserver;
 
 use polars::prelude::DataFrame;
 use serde::{Deserialize, Serialize};
@@ -59,16 +59,34 @@ impl SourceConfig {
     pub fn label(&self) -> String {
         match self {
             SourceConfig::File { path } => path.clone(),
-            SourceConfig::SqlServer { host, port, database, query, .. } => {
+            SourceConfig::SqlServer {
+                host,
+                port,
+                database,
+                query,
+                ..
+            } => {
                 format!("{}:{}/{}/{}", host, port.unwrap_or(1433), database, query)
             }
-            SourceConfig::Postgres { host, port, database, query, .. } => {
+            SourceConfig::Postgres {
+                host,
+                port,
+                database,
+                query,
+                ..
+            } => {
                 format!("{}:{}/{}/{}", host, port.unwrap_or(5432), database, query)
             }
             SourceConfig::Sqlite { path, query } => {
                 format!("{}/{}", path, query)
             }
-            SourceConfig::Mysql { host, port, database, query, .. } => {
+            SourceConfig::Mysql {
+                host,
+                port,
+                database,
+                query,
+                ..
+            } => {
                 format!("{}:{}/{}/{}", host, port.unwrap_or(3306), database, query)
             }
         }
@@ -114,13 +132,41 @@ impl From<std::io::Error> for ConnectorError {
 pub async fn load_source(config: &SourceConfig) -> Result<DataFrame, ConnectorError> {
     match config {
         SourceConfig::File { path } => csv::load(path),
-        SourceConfig::SqlServer { host, port, database, username, password, query } => {
-            sqlserver::load_async(host, port.unwrap_or(1433), database, username, password, query)
-                .await
+        SourceConfig::SqlServer {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            sqlserver::load_async(
+                host,
+                port.unwrap_or(1433),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
         }
-        SourceConfig::Postgres { host, port, database, username, password, query } => {
-            postgres::load_async(host, port.unwrap_or(5432), database, username, password, query)
-                .await
+        SourceConfig::Postgres {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            postgres::load_async(
+                host,
+                port.unwrap_or(5432),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
         }
         SourceConfig::Sqlite { path, query } => {
             let path = path.clone();
@@ -129,9 +175,23 @@ pub async fn load_source(config: &SourceConfig) -> Result<DataFrame, ConnectorEr
                 .await
                 .map_err(|e| ConnectorError::QueryFailed(format!("Task join error: {}", e)))?
         }
-        SourceConfig::Mysql { host, port, database, username, password, query } => {
-            mysql::load_async(host, port.unwrap_or(3306), database, username, password, query)
-                .await
+        SourceConfig::Mysql {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        } => {
+            mysql::load_async(
+                host,
+                port.unwrap_or(3306),
+                database,
+                username,
+                password,
+                query,
+            )
+            .await
         }
     }
 }
@@ -206,8 +266,8 @@ pub async fn read_catalog(config: &SourceConfig) -> crate::catalog::CatalogAvail
             let query = query.clone();
             tokio::task::spawn_blocking(move || sqlite::read_catalog(&path, &query))
                 .await
-                .unwrap_or_else(|e| {
-                    CatalogAvailability::Failed { reason: format!("task join error: {e}") }
+                .unwrap_or_else(|e| CatalogAvailability::Failed {
+                    reason: format!("task join error: {e}"),
                 })
         }
     }
@@ -228,21 +288,44 @@ pub fn parse_source_uri(source: &str, query: Option<&str>) -> Result<SourceConfi
     if let Some(rest) = source.strip_prefix("postgres://") {
         let (username, password, host, port, database) = parse_db_userinfo_netloc(rest)?;
         let query = require_query(query)?;
-        Ok(SourceConfig::Postgres { host, port, database, username, password, query })
+        Ok(SourceConfig::Postgres {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        })
     } else if let Some(rest) = source.strip_prefix("mysql://") {
         let (username, password, host, port, database) = parse_db_userinfo_netloc(rest)?;
         let query = require_query(query)?;
-        Ok(SourceConfig::Mysql { host, port, database, username, password, query })
+        Ok(SourceConfig::Mysql {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        })
     } else if let Some(rest) = source.strip_prefix("sqlserver://") {
         let (username, password, host, port, database) = parse_db_userinfo_netloc(rest)?;
         let query = require_query(query)?;
-        Ok(SourceConfig::SqlServer { host, port, database, username, password, query })
+        Ok(SourceConfig::SqlServer {
+            host,
+            port,
+            database,
+            username,
+            password,
+            query,
+        })
     } else if let Some(rest) = source.strip_prefix("sqlite://") {
         let query = require_query(query)?;
         let path = sqlite_path_from_rest(rest);
         Ok(SourceConfig::Sqlite { path, query })
     } else {
-        Ok(SourceConfig::File { path: source.to_string() })
+        Ok(SourceConfig::File {
+            path: source.to_string(),
+        })
     }
 }
 
@@ -250,40 +333,55 @@ fn require_query(query: Option<&str>) -> Result<String, ConnectorError> {
     query
         .filter(|q| !q.is_empty())
         .map(|q| q.to_string())
-        .ok_or_else(|| ConnectorError::ConnectionFailed(
-            "A table name or SQL query is required for database sources \
-             (use --source-query / --target-query)".to_string(),
-        ))
+        .ok_or_else(|| {
+            ConnectorError::ConnectionFailed(
+                "A table name or SQL query is required for database sources \
+             (use --source-query / --target-query)"
+                    .to_string(),
+            )
+        })
 }
 
 /// Parse the `user:password@host[:port]/database` portion of a DB URI.
 fn parse_db_userinfo_netloc(
     rest: &str,
 ) -> Result<(String, String, String, Option<u16>, String), ConnectorError> {
-    let err = || ConnectorError::ConnectionFailed(
-        "Expected URI format: user:password@host[:port]/database".to_string(),
-    );
+    let err = || {
+        ConnectorError::ConnectionFailed(
+            "Expected URI format: user:password@host[:port]/database".to_string(),
+        )
+    };
     let (userinfo, after_at) = rest.split_once('@').ok_or_else(err)?;
     let (username, password) = userinfo.split_once(':').ok_or_else(err)?;
     let (netloc, database) = after_at.split_once('/').ok_or_else(err)?;
     let (host, port) = if let Some((h, p)) = netloc.split_once(':') {
-        let port = p.parse::<u16>().map_err(|_| {
-            ConnectorError::ConnectionFailed(format!("Invalid port number: {}", p))
-        })?;
+        let port = p
+            .parse::<u16>()
+            .map_err(|_| ConnectorError::ConnectionFailed(format!("Invalid port number: {}", p)))?;
         (h.to_string(), Some(port))
     } else {
         (netloc.to_string(), None)
     };
-    Ok((username.to_string(), password.to_string(), host, port, database.to_string()))
+    Ok((
+        username.to_string(),
+        password.to_string(),
+        host,
+        port,
+        database.to_string(),
+    ))
 }
 
 /// Derive the filesystem path from the portion of a `sqlite://` URI after the scheme.
 fn sqlite_path_from_rest(rest: &str) -> String {
     if rest.starts_with('/') {
         #[cfg(unix)]
-        { return rest.to_string(); }
+        {
+            return rest.to_string();
+        }
         #[cfg(not(unix))]
-        { return rest.trim_start_matches('/').to_string(); }
+        {
+            return rest.trim_start_matches('/').to_string();
+        }
     }
     rest.to_string()
 }

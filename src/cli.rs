@@ -29,10 +29,16 @@ pub enum Commands {
         #[arg(short, long)]
         target: String,
 
-        #[arg(long, help = "Table or SQL query for the source (required when source is a database URI)")]
+        #[arg(
+            long,
+            help = "Table or SQL query for the source (required when source is a database URI)"
+        )]
         source_query: Option<String>,
 
-        #[arg(long, help = "Table or SQL query for the target (required when target is a database URI)")]
+        #[arg(
+            long,
+            help = "Table or SQL query for the target (required when target is a database URI)"
+        )]
         target_query: Option<String>,
 
         #[arg(long, help = "Optional path to a JSON schema policy/contract file")]
@@ -41,7 +47,11 @@ pub enum Commands {
         #[arg(long, help = "File to write the comparison to; requires --format")]
         output: Option<String>,
 
-        #[arg(long, value_enum, help = "Export format: json or csv; requires --output")]
+        #[arg(
+            long,
+            value_enum,
+            help = "Export format: json or csv; requires --output"
+        )]
         format: Option<data::ExportFormat>,
     },
     Data {
@@ -51,10 +61,16 @@ pub enum Commands {
         #[arg(short, long)]
         target: String,
 
-        #[arg(long, help = "Table or SQL query for the source (required when source is a database URI)")]
+        #[arg(
+            long,
+            help = "Table or SQL query for the source (required when source is a database URI)"
+        )]
         source_query: Option<String>,
 
-        #[arg(long, help = "Table or SQL query for the target (required when target is a database URI)")]
+        #[arg(
+            long,
+            help = "Table or SQL query for the target (required when target is a database URI)"
+        )]
         target_query: Option<String>,
 
         #[arg(short, long, required = true)]
@@ -75,7 +91,10 @@ pub enum Commands {
         #[arg(long, help = "Only compare these columns (comma-separated)")]
         only_columns: Option<String>,
 
-        #[arg(long, help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)")]
+        #[arg(
+            long,
+            help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)"
+        )]
         numeric_tolerance: Option<f64>,
 
         #[arg(
@@ -88,14 +107,24 @@ pub enum Commands {
         #[arg(long, help = "Show only modified rows, skip summary tables")]
         diffs_only: bool,
 
-        #[arg(long, help = "Output results as JSON to stdout (suppresses all other output)")]
+        #[arg(
+            long,
+            help = "Output results as JSON to stdout (suppresses all other output)"
+        )]
         json: bool,
     },
     Batch {
-        #[arg(long, help = "Path to a batch manifest describing source/target pairs (JSON or CSV)")]
+        #[arg(
+            long,
+            help = "Path to a batch manifest describing source/target pairs (JSON or CSV)"
+        )]
         manifest: String,
 
-        #[arg(long, value_enum, help = "Override manifest parsing format (json or csv)")]
+        #[arg(
+            long,
+            value_enum,
+            help = "Override manifest parsing format (json or csv)"
+        )]
         manifest_format: Option<data::ManifestFormat>,
 
         #[arg(short, long, required = true)]
@@ -113,7 +142,10 @@ pub enum Commands {
         #[arg(long, help = "Only compare these columns (comma-separated)")]
         only_columns: Option<String>,
 
-        #[arg(long, help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)")]
+        #[arg(
+            long,
+            help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)"
+        )]
         numeric_tolerance: Option<f64>,
 
         #[arg(

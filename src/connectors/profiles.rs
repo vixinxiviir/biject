@@ -41,20 +41,26 @@ impl std::fmt::Display for ProfileError {
 }
 
 impl From<std::io::Error> for ProfileError {
-    fn from(e: std::io::Error) -> Self { ProfileError::Io(e) }
+    fn from(e: std::io::Error) -> Self {
+        ProfileError::Io(e)
+    }
 }
 
 impl From<serde_json::Error> for ProfileError {
-    fn from(e: serde_json::Error) -> Self { ProfileError::Json(e) }
+    fn from(e: serde_json::Error) -> Self {
+        ProfileError::Json(e)
+    }
 }
 
 fn profiles_path() -> Result<PathBuf, ProfileError> {
     let base = dirs::data_local_dir()
         .or_else(dirs::home_dir)
-        .ok_or_else(|| ProfileError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Cannot locate app data directory",
-        )))?;
+        .ok_or_else(|| {
+            ProfileError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Cannot locate app data directory",
+            ))
+        })?;
     let dir = base.join(APP_NAME);
     fs::create_dir_all(&dir)?;
     Ok(dir.join(PROFILES_FILE))
@@ -77,8 +83,7 @@ fn write_profiles(profiles: &[ConnectionProfile]) -> Result<(), ProfileError> {
 }
 
 fn keyring_entry(profile_name: &str) -> Result<keyring::Entry, ProfileError> {
-    keyring::Entry::new(APP_NAME, profile_name)
-        .map_err(|e| ProfileError::Keyring(e.to_string()))
+    keyring::Entry::new(APP_NAME, profile_name).map_err(|e| ProfileError::Keyring(e.to_string()))
 }
 
 /// Return all saved profiles (no passwords).
@@ -95,20 +100,27 @@ pub fn save_profile(profile: ConnectionProfile, password: &str) -> Result<(), Pr
     }
     // Store password in OS keychain first — if this fails we don't write disk
     let entry = keyring_entry(&profile.name)?;
-    entry.set_password(password)
+    entry
+        .set_password(password)
         .map_err(|e| ProfileError::Keyring(e.to_string()))?;
     profiles.push(profile);
     write_profiles(&profiles)
 }
 
 /// Overwrite an existing profile (by name). Updates keychain password if provided.
-pub fn update_profile(profile: ConnectionProfile, password: Option<&str>) -> Result<(), ProfileError> {
+pub fn update_profile(
+    profile: ConnectionProfile,
+    password: Option<&str>,
+) -> Result<(), ProfileError> {
     let mut profiles = read_profiles()?;
-    let pos = profiles.iter().position(|p| p.name == profile.name)
+    let pos = profiles
+        .iter()
+        .position(|p| p.name == profile.name)
         .ok_or_else(|| ProfileError::NotFound(profile.name.clone()))?;
     if let Some(pwd) = password {
         let entry = keyring_entry(&profile.name)?;
-        entry.set_password(pwd)
+        entry
+            .set_password(pwd)
             .map_err(|e| ProfileError::Keyring(e.to_string()))?;
     }
     profiles[pos] = profile;
@@ -118,7 +130,9 @@ pub fn update_profile(profile: ConnectionProfile, password: Option<&str>) -> Res
 /// Delete a profile and remove its keychain entry.
 pub fn delete_profile(name: &str) -> Result<(), ProfileError> {
     let mut profiles = read_profiles()?;
-    let pos = profiles.iter().position(|p| p.name == name)
+    let pos = profiles
+        .iter()
+        .position(|p| p.name == name)
         .ok_or_else(|| ProfileError::NotFound(name.to_string()))?;
     // Remove from keychain (best-effort)
     if let Ok(entry) = keyring_entry(name) {
@@ -131,6 +145,7 @@ pub fn delete_profile(name: &str) -> Result<(), ProfileError> {
 /// Retrieve the password for a profile from the OS keychain.
 pub fn get_password(profile_name: &str) -> Result<String, ProfileError> {
     let entry = keyring_entry(profile_name)?;
-    entry.get_password()
+    entry
+        .get_password()
         .map_err(|e| ProfileError::Keyring(e.to_string()))
 }
