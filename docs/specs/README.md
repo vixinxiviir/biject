@@ -130,6 +130,25 @@ knowledge about databases rather than migration generation:
 - **Per-dialect statement generation** — the paid half, which consumes the
   above.
 
+## Notes from the 0.9 round
+
+- **A spec's expected-file list is also a blind-spot list.** 0.9a landed green on
+  everything anyone could run locally and broke CI, because
+  `tests/catalog_rules.rs` asserts against live MySQL and SQL Server and the spec
+  never mentioned it. Nobody could have caught it: those tests are `#[ignore]`d,
+  they need two servers, and neither the implementer nor the reviewer had them
+  running. **When a spec touches `src/connectors/`, work out which live-server
+  test files encode a claim about that connector and name them.** There are two:
+  `tests/catalog_postgres.rs` and `tests/catalog_rules.rs`.
+- The assertion that broke was `catalog.unread.is_empty()`. It is now
+  `assert_eq!(catalog.unread, vec![ConstraintKind::ForeignKey])` — which will fail
+  again the moment 0.9b lands, on purpose, and 0.9b says so. An exact assertion
+  that fails loudly when reality moves is worth more than a loose one that
+  quietly keeps passing.
+- Running the live tests locally is cheap once the containers exist. The DSNs are
+  in each test file's own header; the servers are ordinary `postgres:16`,
+  `mysql:8` and `mcr.microsoft.com/mssql/server:2022-latest` containers.
+
 ## Notes from the 0.7/0.8 round
 
 - **One report claimed a spec was complete when the file it centred on had not

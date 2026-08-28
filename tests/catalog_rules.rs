@@ -89,10 +89,15 @@ fn assert_reads_rules(catalog: &TableCatalog, engine: &str) {
         catalog.indexes
     );
 
-    assert!(
-        catalog.unread.is_empty(),
-        "{engine}: these servers can report every kind: {:?}",
-        catalog.unread
+    // Both servers expose every kind of rule; what is unread here is unread
+    // because the connector does not read it yet, not because the engine will
+    // not say. Asserted exactly rather than as "contains foreign keys": when
+    // 0.9b lands, this fails and has to be updated, which is the point of
+    // writing it down.
+    assert_eq!(
+        catalog.unread,
+        vec![ConstraintKind::ForeignKey],
+        "{engine}: foreign keys are the only kind these connectors do not read yet"
     );
 }
 
