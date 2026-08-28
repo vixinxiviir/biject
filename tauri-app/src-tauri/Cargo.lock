@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "biject"
-version = "0.6.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "biject-gui"
-version = "0.6.0"
+version = "0.8.0"
 dependencies = [
  "biject",
  "keyring",

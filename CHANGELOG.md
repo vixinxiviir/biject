@@ -27,6 +27,54 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ---
 
+## [0.8.0] — 2026-08-28
+
+0.7 was never released. Its work — canonical type names, dialect handling and
+per-engine type rendering — is here, so the version is skipped rather than
+tagged retroactively on a commit that was never prepared as a release.
+
+### Added
+
+- **`--fail-on breaking` / `--fail-on any`** on `schema`, so gating CI no
+  longer needs a policy file containing one line. `breaking` reuses the
+  compatibility verdict the report already prints rather than defining
+  "breaking" a second time. When the comparison was incomplete — a CSV has no
+  catalog — it says so on stderr before judging, and still judges: a warning is
+  not a reason to fail a comparison of two files.
+- **Policy rules for constraints and indexes.** `require_constraints`,
+  `require_primary_key_on`, `require_indexes` and `forbid_extra_constraints`.
+  A rule that could not be evaluated — an unreadable catalog, a constraint kind
+  the connector cannot report — is a violation rather than a quiet pass, because
+  a green CI run on a check that never ran is worse than no check.
+- **`sqltype` and `sqldialect`**, public modules carrying canonical type names,
+  per-engine identifier quoting and per-engine type rendering. Rendering refuses
+  where an engine has no such type instead of substituting something close: a
+  `tinyint` does not become a `smallint` on PostgreSQL, and an `nvarchar` does
+  not become a `varchar` anywhere.
+
+### Changed
+
+- **Schema comparison no longer downloads the table.** It ran `SELECT *` and
+  pulled every row of both sides across the network to read their column names.
+  It now asks for zero rows — `LIMIT 0`, or `TOP 0` on SQL Server. This became
+  possible in 0.6, when connectors started taking their column list from the
+  statement description rather than from the first row. `data` still loads rows;
+  it compares them.
+- **Breaking:** the schema CSV's second column is headed `subject`, not
+  `column`. It has never held only column names — a gap row holds `source` or
+  `target` — and it now holds constraint and index names too.
+
+### Fixed
+
+- **The same type spelled two ways was reported as a breaking change.**
+  `VARCHAR(50)` against `CHARACTER VARYING(50)`, `INT` against `INTEGER`,
+  `DECIMAL(12,2)` against `NUMERIC(12,2)`. PostgreSQL's catalog always reports
+  the long spelling, so every string column differed whenever a PostgreSQL
+  table was compared with one on any other engine, and the verdict came back
+  incompatible for a schema nobody had changed.
+
+---
+
 ## [0.6.0] — 2026-08-26
 
 ### Added
@@ -229,6 +277,7 @@ manifests, schema policies, and a Tauri desktop app with connectors for SQL
 Server, PostgreSQL, MySQL/MariaDB and SQLite.
 
 [Unreleased]: https://github.com/vixinxiviir/biject/compare/v0.6.0...HEAD
+[0.8.0]: https://github.com/vixinxiviir/biject/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/vixinxiviir/biject/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vixinxiviir/biject/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vixinxiviir/biject/compare/v0.3.0...v0.4.0
