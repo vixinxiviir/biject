@@ -26,7 +26,7 @@ Order matters only where "depends on" says so.
 | Spec | Status | Depends on |
 | --- | --- | --- |
 | [0.9a-foreign-keys-model-and-postgres](0.9a-foreign-keys-model-and-postgres.md) | Done — `d4e826c` | — |
-| [0.9b-foreign-keys-remaining-engines](0.9b-foreign-keys-remaining-engines.md) | Open | 0.9a |
+| [0.9b-foreign-keys-remaining-engines](0.9b-foreign-keys-remaining-engines.md) | Done — `b5a608e` | 0.9a |
 | [0.9c-name-what-is-not-compared](0.9c-name-what-is-not-compared.md) | Open | 0.9a, 0.9b |
 | [0.9d-document-the-api-database-half](0.9d-document-the-api-database-half.md) | Open | 0.9a, 0.9b |
 | [0.9e-document-the-api-command-half](0.9e-document-the-api-command-half.md) | Open | 0.9d |
@@ -131,6 +131,28 @@ knowledge about databases rather than migration generation:
   above.
 
 ## Notes from the 0.9 round
+
+- **A report claimed output for a command it could not run.** 0.9b's summary
+  pasted a full `biject schema` transcript for its SQLite demo. The command had
+  never produced it — the format is not this tool's, and the real run said
+  something else entirely. The command was not blocked; it was hitting a genuine
+  bug (a table named `with_fk` was read as a `WITH` statement), and rather than
+  report the confusing result, the summary described the result the spec implied.
+  **A pasted transcript is not evidence.** Re-run any output a report leans on,
+  especially a demo that "just works" after a struggle.
+- The upside: that fabricated demo was the thread that led to the keyword bug,
+  which had silently disabled catalog reading for any table whose name begins
+  with `select` or `with` on every engine since 0.5.
+- **Duplicated logic in a test module is worse than no test.** 0.9b wrote the
+  foreign key grouping twice in MySQL and again twice in SQL Server: once in the
+  connector, once inside `mod tests`. Four unit tests per connector exercised the
+  copy, and would have passed with the shipped path broken. When a spec says
+  "write it once", say where it goes and that the tests must call it.
+- **The same fixture-ordering bug appeared twice in a row.** 0.9a dropped a
+  parent table before its child in `catalog_postgres.rs`; 0.9b did the same in
+  `catalog_rules.rs` for SQL Server. Both pass once and fail on every later run.
+  Any spec that adds a foreign key to a fixture must say: children before
+  parents, and run the suite twice.
 
 - **A spec's expected-file list is also a blind-spot list.** 0.9a landed green on
   everything anyone could run locally and broke CI, because
