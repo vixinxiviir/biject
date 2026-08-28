@@ -200,6 +200,7 @@ pub fn read_catalog(path: &str, query: &str) -> CatalogAvailability {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn load_catalog(
     path: &str,
     schema: Option<&str>,
@@ -370,15 +371,180 @@ fn load_catalog(
     // in the original CREATE TABLE text in `sqlite_master`, and recovering them
     // means parsing SQL. Declared unread so their absence is never read as
     // evidence that the table has none.
+    let mut unread = vec![ConstraintKind::Check];
+
+    // Foreign keys via PRAGMA foreign_key_list. If the pragma fails, the kind
+    // is declared unread rather than silently skipped.
+    {
+        let fk_sql = if schema.is_some() {
+            "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete, match FROM pragma_foreign_key_list(?1, ?2)"
+        } else {
+            "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete, match FROM pragma_foreign_key_list(?1)"
+        };
+        let mut fk_stmt = match conn.prepare(fk_sql) {
+            Ok(s) => s,
+            Err(_) => {
+                unread.push(ConstraintKind::ForeignKey);
+                return Ok(Some(
+                    TableCatalog::new(columns)
+                        .with_constraints(constraints)
+                        .with_indexes(indexes)
+                        .with_unread(unread),
+                ));
+            }
+        };
+
+        // Helper to map SQLite action text to ReferentialAction.
+        let parse_action = |s: &str| -> crate::catalog::ReferentialAction {
+            let t = s.trim();
+            match t.to_ascii_uppercase().as_str() {
+                "NO ACTION" => crate::catalog::ReferentialAction::NoAction,
+                "RESTRICT" => crate::catalog::ReferentialAction::Restrict,
+                "CASCADE" => crate::catalog::ReferentialAction::Cascade,
+                "SET NULL" => crate::catalog::ReferentialAction::SetNull,
+                "SET DEFAULT" => crate::catalog::ReferentialAction::SetDefault,
+                other => crate::catalog::ReferentialAction::Other(other.to_string()),
+            }
+        };
+
+        // Fetch foreign key rows.
+        let fk_rows_res: Result<
+            Vec<(i64, i64, String, String, Option<String>, String, String)>,
+            (),
+        > = match schema {
+            Some(sch) => {
+                match fk_stmt.query_map(rusqlite::params![table, sch], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                }) {
+                    Ok(it) => it.collect::<Result<Vec<_>, _>>().map_err(|_| ()),
+                    Err(_) => Err(()),
+                }
+            }
+            None => {
+                match fk_stmt.query_map(rusqlite::params![table], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                }) {
+                    Ok(it) => it.collect::<Result<Vec<_>, _>>().map_err(|_| ()),
+                    Err(_) => Err(()),
+                }
+            }
+        };
+
+        match fk_rows_res {
+            Ok(rows) if !rows.is_empty() => {
+                use std::collections::BTreeMap;
+                let mut groups: BTreeMap<
+                    i64,
+                    Vec<(i64, String, Option<String>, String, String, String)>,
+                > = BTreeMap::new();
+                for (id, seq, ref_table, from_col, to_col, on_update, on_delete) in rows {
+                    groups
+                        .entry(id)
+                        .or_default()
+                        .push((seq, from_col, to_col, ref_table, on_update, on_delete));
+                }
+
+                let mut foreign_key_unread = false;
+                for (id, mut entries) in groups {
+                    // Order by seq.
+                    entries.sort_by_key(|(seq, _, _, _, _, _)| *seq);
+                    let columns: Vec<String> = entries
+                        .iter()
+                        .map(|(_, from, _, _, _, _)| from.clone())
+                        .collect();
+                    let referenced_table = entries[0].3.clone();
+                    let needs_resolution = entries.iter().any(|(_, _, to, _, _, _)| to.is_none());
+                    let referenced_columns = if needs_resolution {
+                        // Resolve via the referenced table's primary key.
+                        // This is a deliberate exception to 0.9a's "do not follow the reference" rule:
+                        // SQLite offers no other way to learn what the key points at.
+                        let pk_sql = if schema.is_some() {
+                            "SELECT name FROM pragma_table_info(?1, ?2) WHERE pk > 0 ORDER BY pk"
+                        } else {
+                            "SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk"
+                        };
+                        let mut pk_stmt = match conn.prepare(pk_sql) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                foreign_key_unread = true;
+                                break;
+                            }
+                        };
+                        let pk_names: Result<Vec<String>, _> = match schema {
+                            Some(sch) => pk_stmt
+                                .query_map(rusqlite::params![referenced_table, sch], |row| {
+                                    row.get(0)
+                                })
+                                .and_then(|it| it.collect()),
+                            None => pk_stmt
+                                .query_map(rusqlite::params![referenced_table], |row| row.get(0))
+                                .and_then(|it| it.collect()),
+                        };
+                        match pk_names {
+                            Ok(names) if !names.is_empty() => names,
+                            _ => {
+                                foreign_key_unread = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        entries
+                            .iter()
+                            .filter_map(|(_, _, to, _, _, _)| to.clone())
+                            .collect()
+                    };
+
+                    let on_update = parse_action(&entries[0].4);
+                    let on_delete = parse_action(&entries[0].5);
+
+                    constraints.push(Constraint::ForeignKey {
+                        name: format!("foreign_key_{}", id),
+                        columns,
+                        referenced_table,
+                        referenced_columns,
+                        on_delete,
+                        on_update,
+                    });
+                }
+
+                if foreign_key_unread {
+                    // A key whose referenced columns could not be resolved
+                    // makes the whole kind unreliable for this table, and
+                    // `compare` skips an unread kind outright. Drop the keys
+                    // gathered before the failure too: leaving them in a list
+                    // that is declared unread is a half-answer, and
+                    // `constraints` is public, so a consumer reading it
+                    // directly would not know to ignore them.
+                    constraints.retain(|c| !matches!(c, Constraint::ForeignKey { .. }));
+                    unread.push(ConstraintKind::ForeignKey);
+                }
+            }
+            Ok(_) => {}
+            Err(_) => unread.push(ConstraintKind::ForeignKey),
+        }
+    }
+
     Ok(Some(
         TableCatalog::new(columns)
             .with_constraints(constraints)
             .with_indexes(indexes)
-            // Check bodies live only in the original CREATE TABLE text, which
-            // this does not parse. Foreign keys are modelled but not yet read
-            // here. Both are declared rather than left out, so an empty list
-            // does not read as "this table has none".
-            .with_unread(vec![ConstraintKind::Check, ConstraintKind::ForeignKey]),
+            .with_unread(unread),
     ))
 }
 
@@ -865,6 +1031,84 @@ mod tests {
             "{changes:#?}"
         );
 
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_key_declared_without_a_column_list_resolves_to_the_referenced_primary_key() {
+        let path = scratch_db(
+            "fk_no_columns",
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY, v TEXT);
+             CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER, FOREIGN KEY(parent_id) REFERENCES parent);",
+        );
+        let catalog = catalog_of(&path, "child");
+        let fks: Vec<_> = catalog
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, crate::catalog::Constraint::ForeignKey { .. }))
+            .collect();
+        assert_eq!(fks.len(), 1);
+        if let crate::catalog::Constraint::ForeignKey {
+            columns,
+            referenced_table,
+            referenced_columns,
+            ..
+        } = fks[0]
+        {
+            assert_eq!(columns, &["parent_id"]);
+            assert_eq!(referenced_table, "parent");
+            assert_eq!(referenced_columns, &["id"]);
+        } else {
+            panic!("expected foreign key");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_composite_primary_key_resolves_in_key_order() {
+        let path = scratch_db(
+            "fk_composite_pk",
+            "CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY(a, b));
+             CREATE TABLE child (id INTEGER PRIMARY KEY, pa INTEGER, pb INTEGER, FOREIGN KEY(pa, pb) REFERENCES parent);",
+        );
+        let catalog = catalog_of(&path, "child");
+        let fks: Vec<_> = catalog
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, crate::catalog::Constraint::ForeignKey { .. }))
+            .collect();
+        assert_eq!(fks.len(), 1);
+        if let crate::catalog::Constraint::ForeignKey {
+            columns,
+            referenced_columns,
+            ..
+        } = fks[0]
+        {
+            assert_eq!(columns, &["pa", "pb"]);
+            assert_eq!(referenced_columns, &["a", "b"]);
+        } else {
+            panic!("expected foreign key");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_key_whose_target_cannot_be_read_leaves_the_kind_unread() {
+        let path = scratch_db(
+            "fk_missing_target",
+            "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER, FOREIGN KEY(parent_id) REFERENCES missing_parent);",
+        );
+        let catalog = catalog_of(&path, "child");
+        // The foreign key kind should be unread because the referenced table does not exist.
+        assert!(catalog
+            .unread
+            .contains(&crate::catalog::ConstraintKind::ForeignKey));
+        let fks: Vec<_> = catalog
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, crate::catalog::Constraint::ForeignKey { .. }))
+            .collect();
+        assert!(fks.is_empty(), "no partial key should be recorded");
         std::fs::remove_file(&path).ok();
     }
 }

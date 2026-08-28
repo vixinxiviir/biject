@@ -1,9 +1,11 @@
 use super::ConnectorError;
 use crate::catalog::{
-    CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, TableCatalog,
+    CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, ReferentialAction,
+    TableCatalog,
 };
 use futures_util::TryStreamExt;
 use polars::prelude::*;
+use std::collections::BTreeMap;
 use tiberius::{AuthMethod, Client, ColumnData, ColumnType, Config, QueryItem, Row};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
@@ -563,13 +565,53 @@ async fn load_catalog(
         });
     }
 
+    // Foreign keys: read via sys.foreign_keys and sys.foreign_key_columns.
+    // If the query fails, the kind is declared unread rather than silently
+    // skipped.
+    let mut unread = Vec::new();
+    let table_identifier = format!("{}.{}", schema, table);
+    const FOREIGN_KEY_QUERY: &str = "
+        SELECT fk.name,
+               OBJECT_SCHEMA_NAME(fk.referenced_object_id) + '.' + OBJECT_NAME(fk.referenced_object_id),
+               pc.name,
+               rc.name,
+               fk.delete_referential_action_desc,
+               fk.update_referential_action_desc
+        FROM sys.foreign_keys fk
+        JOIN sys.foreign_key_columns fkc
+          ON fkc.constraint_object_id = fk.object_id
+        JOIN sys.columns pc
+          ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+        JOIN sys.columns rc
+          ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+        WHERE fk.parent_object_id = OBJECT_ID(@P1)
+        ORDER BY fk.name, fkc.constraint_column_id";
+
+    match client.query(FOREIGN_KEY_QUERY, &[&table_identifier]).await {
+        Ok(stream) => {
+            let fk_rows = stream
+                .into_first_result()
+                .await
+                .map_err(|e| ConnectorError::QueryFailed(e.to_string()))?;
+            let rows: Vec<ForeignKeyRow> = fk_rows
+                .iter()
+                .map(|row| {
+                    let cell = |i: usize| -> String {
+                        row.get::<&str, _>(i).unwrap_or_default().to_string()
+                    };
+                    (cell(0), cell(1), cell(2), cell(3), cell(4), cell(5))
+                })
+                .collect();
+            constraints.extend(group_foreign_keys(rows));
+        }
+        Err(_) => unread.push(ConstraintKind::ForeignKey),
+    }
+
     Ok(Some(
         TableCatalog::new(columns)
             .with_constraints(constraints)
             .with_indexes(indexes)
-            // Modelled but not yet read here. Declared unread rather than left
-            // out, so an empty list does not read as "this table has none".
-            .with_unread(vec![ConstraintKind::ForeignKey]),
+            .with_unread(unread),
     ))
 }
 
@@ -695,6 +737,71 @@ pub async fn load_schema_async(
                 Err(e)
             }
         }
+    }
+}
+
+/// One row of `FOREIGN_KEY_QUERY`: constraint name, referenced table, local
+/// column, referenced column, delete action, update action.
+type ForeignKeyRow = (String, String, String, String, String, String);
+
+/// A key being assembled: local columns, referenced columns, referenced table,
+/// delete action, update action.
+type ForeignKeyParts = (Vec<String>, Vec<String>, String, String, String);
+
+/// SQL Server reports a foreign key one column at a time, so a two-column key
+/// is two rows sharing a constraint name. Gather them back into one constraint.
+///
+/// Rows must arrive ordered by name then `constraint_column_id`: key order is
+/// not alphabetical order, and a pair assembled in the wrong order is a wrong
+/// answer that looks right.
+fn group_foreign_keys(rows: Vec<ForeignKeyRow>) -> Vec<Constraint> {
+    let mut keys: BTreeMap<String, ForeignKeyParts> = BTreeMap::new();
+    for (name, referenced_table, column, referenced_column, on_delete, on_update) in rows {
+        // The referenced table and the two actions are properties of the key,
+        // so every row of one carries the same values. The first row's win.
+        let entry = keys.entry(name).or_insert((
+            Vec::new(),
+            Vec::new(),
+            referenced_table,
+            on_delete,
+            on_update,
+        ));
+        entry.0.push(column);
+        entry.1.push(referenced_column);
+    }
+
+    keys.into_iter()
+        .map(
+            |(name, (columns, referenced_columns, referenced_table, on_delete, on_update))| {
+                Constraint::ForeignKey {
+                    name,
+                    columns,
+                    referenced_table,
+                    referenced_columns,
+                    on_delete: referential_action(&on_delete),
+                    on_update: referential_action(&on_update),
+                }
+            },
+        )
+        .collect()
+}
+
+/// One of `delete_referential_action_desc` / `update_referential_action_desc`.
+///
+/// Note the underscores: SQL Server spells these `NO_ACTION` and `SET_NULL`
+/// where every other engine here writes `NO ACTION` and `SET NULL`. Copying
+/// another connector's table over this one would turn every action into
+/// `Other`. SQL Server has no `RESTRICT` at all.
+///
+/// Anything unrecognised is kept verbatim rather than folded into `NoAction`,
+/// which would be a claim about what a real delete does to real rows.
+fn referential_action(desc: &str) -> ReferentialAction {
+    match desc.trim() {
+        "NO_ACTION" => ReferentialAction::NoAction,
+        "CASCADE" => ReferentialAction::Cascade,
+        "SET_NULL" => ReferentialAction::SetNull,
+        "SET_DEFAULT" => ReferentialAction::SetDefault,
+        other => ReferentialAction::Other(other.to_string()),
     }
 }
 
@@ -889,5 +996,97 @@ mod tests {
     fn the_subquery_alias_is_present() {
         let s = schema_query("SELECT id FROM t");
         assert!(s.contains("AS biject_schema_probe"), "{}", s);
+    }
+
+    // Foreign key grouping tests
+    #[test]
+    fn a_composite_key_is_one_constraint_rather_than_one_per_column() {
+        let rows = vec![
+            (
+                "fk1".to_string(),
+                "dbo.t".to_string(),
+                "a".to_string(),
+                "x".to_string(),
+                "NO_ACTION".to_string(),
+                "NO_ACTION".to_string(),
+            ),
+            (
+                "fk1".to_string(),
+                "dbo.t".to_string(),
+                "b".to_string(),
+                "y".to_string(),
+                "NO_ACTION".to_string(),
+                "NO_ACTION".to_string(),
+            ),
+        ];
+        let constraints = group_foreign_keys(rows);
+        assert_eq!(constraints.len(), 1);
+        assert_eq!(constraints[0].columns(), &["a", "b"]);
+    }
+
+    #[test]
+    fn key_order_follows_the_declared_position_not_the_column_name() {
+        let rows = vec![
+            (
+                "fk1".to_string(),
+                "dbo.t".to_string(),
+                "b".to_string(),
+                "y".to_string(),
+                "NO_ACTION".to_string(),
+                "NO_ACTION".to_string(),
+            ),
+            (
+                "fk1".to_string(),
+                "dbo.t".to_string(),
+                "a".to_string(),
+                "x".to_string(),
+                "NO_ACTION".to_string(),
+                "NO_ACTION".to_string(),
+            ),
+        ];
+        let constraints = group_foreign_keys(rows);
+        assert_eq!(constraints[0].columns(), &["b", "a"]);
+    }
+
+    #[test]
+    fn two_keys_on_one_table_do_not_merge() {
+        let rows = vec![
+            (
+                "fk1".to_string(),
+                "dbo.t".to_string(),
+                "a".to_string(),
+                "x".to_string(),
+                "NO_ACTION".to_string(),
+                "NO_ACTION".to_string(),
+            ),
+            (
+                "fk2".to_string(),
+                "dbo.t".to_string(),
+                "b".to_string(),
+                "y".to_string(),
+                "NO_ACTION".to_string(),
+                "NO_ACTION".to_string(),
+            ),
+        ];
+        let constraints = group_foreign_keys(rows);
+        assert_eq!(constraints.len(), 2);
+    }
+
+    #[test]
+    fn an_action_the_engine_spells_differently_is_kept_verbatim() {
+        let rows = vec![(
+            "fk1".to_string(),
+            "dbo.t".to_string(),
+            "a".to_string(),
+            "x".to_string(),
+            "UNKNOWN_ACTION".to_string(),
+            "NO_ACTION".to_string(),
+        )];
+        let constraints = group_foreign_keys(rows);
+        if let crate::catalog::Constraint::ForeignKey { on_delete, .. } = &constraints[0] {
+            assert_eq!(on_delete.to_string(), "UNKNOWN_ACTION");
+        } else {
+            panic!("expected foreign key");
+        }
     }
 }

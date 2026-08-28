@@ -1,9 +1,11 @@
 use super::ConnectorError;
 use crate::catalog::{
-    CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, TableCatalog,
+    CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, ReferentialAction,
+    TableCatalog,
 };
 use mysql_async::{consts::ColumnType, prelude::*, Opts, OptsBuilder, Pool, Row, Value};
 use polars::prelude::*;
+use std::collections::BTreeMap;
 
 /// Connect to MySQL / MariaDB and execute a query, returning the result as a Polars DataFrame.
 ///
@@ -411,9 +413,7 @@ async fn load_catalog(
         WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ?
         ORDER BY cc.CONSTRAINT_NAME";
 
-    // Foreign keys are modelled but not yet read here. Declared unread rather
-    // than left out, so an empty list does not read as "this table has none".
-    let mut unread = vec![ConstraintKind::ForeignKey];
+    let mut unread = Vec::new();
     match conn
         .exec::<(String, String), _, _>(CHECK_QUERY, (schema, table))
         .await
@@ -424,6 +424,34 @@ async fn load_catalog(
             }
         }
         Err(_) => unread.push(ConstraintKind::Check),
+    }
+
+    // Foreign keys: read via KEY_COLUMN_USAGE + REFERENTIAL_CONSTRAINTS.
+    // If the query fails, the kind is declared unread rather than silently
+    // skipped.
+    const FOREIGN_KEY_QUERY: &str = "
+        SELECT kcu.CONSTRAINT_NAME,
+               kcu.COLUMN_NAME,
+               kcu.REFERENCED_TABLE_NAME,
+               kcu.REFERENCED_COLUMN_NAME,
+               rc.DELETE_RULE,
+               rc.UPDATE_RULE
+        FROM information_schema.KEY_COLUMN_USAGE kcu
+        JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+          ON  rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+         AND rc.CONSTRAINT_NAME   = kcu.CONSTRAINT_NAME
+         AND rc.TABLE_NAME        = kcu.TABLE_NAME
+        WHERE kcu.TABLE_SCHEMA = ?
+          AND kcu.TABLE_NAME   = ?
+          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";
+
+    match conn
+        .exec::<ForeignKeyRow, _, _>(FOREIGN_KEY_QUERY, (schema, table))
+        .await
+    {
+        Ok(rows) => constraints.extend(group_foreign_keys(rows)),
+        Err(_) => unread.push(ConstraintKind::ForeignKey),
     }
 
     // STATISTICS lists the indexes behind primary keys and unique constraints
@@ -572,6 +600,68 @@ pub async fn load_schema_async(
                 Err(e)
             }
         }
+    }
+}
+
+/// One row of `FOREIGN_KEY_QUERY`: constraint name, local column, referenced
+/// table, referenced column, delete rule, update rule.
+type ForeignKeyRow = (String, String, String, String, String, String);
+
+/// A key being assembled: local columns, referenced columns, referenced table,
+/// delete action, update action.
+type ForeignKeyParts = (Vec<String>, Vec<String>, String, String, String);
+
+/// MySQL reports a foreign key one column at a time, so a two-column key is two
+/// rows sharing a constraint name. Gather them back into one constraint.
+///
+/// Rows must arrive ordered by constraint name then `ORDINAL_POSITION`: key
+/// order is not alphabetical order, and a pair assembled in the wrong order is
+/// a wrong answer that looks right.
+fn group_foreign_keys(rows: Vec<ForeignKeyRow>) -> Vec<Constraint> {
+    let mut keys: BTreeMap<String, ForeignKeyParts> = BTreeMap::new();
+    for (name, column, referenced_table, referenced_column, delete_rule, update_rule) in rows {
+        // The referenced table and the two rules are properties of the key, so
+        // every row of one carries the same values. The first row's win.
+        let entry = keys.entry(name).or_insert((
+            Vec::new(),
+            Vec::new(),
+            referenced_table,
+            delete_rule,
+            update_rule,
+        ));
+        entry.0.push(column);
+        entry.1.push(referenced_column);
+    }
+
+    keys.into_iter()
+        .map(
+            |(name, (columns, referenced_columns, referenced_table, on_delete, on_update))| {
+                Constraint::ForeignKey {
+                    name,
+                    columns,
+                    referenced_table,
+                    referenced_columns,
+                    on_delete: referential_action(&on_delete),
+                    on_update: referential_action(&on_update),
+                }
+            },
+        )
+        .collect()
+}
+
+/// One of `REFERENTIAL_CONSTRAINTS.DELETE_RULE` / `UPDATE_RULE`.
+///
+/// An unrecognised rule is kept verbatim rather than folded into `NoAction`: a
+/// new one silently reported as "nothing happens" is a claim about what a real
+/// delete does to real rows.
+fn referential_action(rule: &str) -> ReferentialAction {
+    match rule.trim().to_ascii_uppercase().as_str() {
+        "NO ACTION" => ReferentialAction::NoAction,
+        "RESTRICT" => ReferentialAction::Restrict,
+        "CASCADE" => ReferentialAction::Cascade,
+        "SET NULL" => ReferentialAction::SetNull,
+        "SET DEFAULT" => ReferentialAction::SetDefault,
+        other => ReferentialAction::Other(other.to_string()),
     }
 }
 
@@ -794,5 +884,100 @@ mod tests {
     fn the_subquery_alias_is_present() {
         let s = schema_query("SELECT id FROM t");
         assert!(s.contains("AS biject_schema_probe"), "{}", s);
+    }
+
+    // Foreign key grouping tests
+    #[test]
+    fn a_composite_key_is_one_constraint_rather_than_one_per_column() {
+        let rows = vec![
+            (
+                "fk1".to_string(),
+                "a".to_string(),
+                "t".to_string(),
+                "x".to_string(),
+                "CASCADE".to_string(),
+                "NO ACTION".to_string(),
+            ),
+            (
+                "fk1".to_string(),
+                "b".to_string(),
+                "t".to_string(),
+                "y".to_string(),
+                "CASCADE".to_string(),
+                "NO ACTION".to_string(),
+            ),
+        ];
+        let constraints = group_foreign_keys(rows);
+        assert_eq!(constraints.len(), 1);
+        assert_eq!(constraints[0].columns(), &["a", "b"]);
+        assert_eq!(constraints[0].name(), "fk1");
+    }
+
+    #[test]
+    fn key_order_follows_the_declared_position_not_the_column_name() {
+        let rows = vec![
+            (
+                "fk1".to_string(),
+                "b".to_string(),
+                "t".to_string(),
+                "y".to_string(),
+                "CASCADE".to_string(),
+                "NO ACTION".to_string(),
+            ),
+            (
+                "fk1".to_string(),
+                "a".to_string(),
+                "t".to_string(),
+                "x".to_string(),
+                "CASCADE".to_string(),
+                "NO ACTION".to_string(),
+            ),
+        ];
+        // Our grouping preserves input order; the query is ordered by ORDINAL_POSITION,
+        // so the test ensures we don't sort by column name.
+        let constraints = group_foreign_keys(rows);
+        assert_eq!(constraints[0].columns(), &["b", "a"]);
+    }
+
+    #[test]
+    fn two_keys_on_one_table_do_not_merge() {
+        let rows = vec![
+            (
+                "fk1".to_string(),
+                "a".to_string(),
+                "t".to_string(),
+                "x".to_string(),
+                "CASCADE".to_string(),
+                "NO ACTION".to_string(),
+            ),
+            (
+                "fk2".to_string(),
+                "b".to_string(),
+                "t".to_string(),
+                "y".to_string(),
+                "CASCADE".to_string(),
+                "NO ACTION".to_string(),
+            ),
+        ];
+        let constraints = group_foreign_keys(rows);
+        assert_eq!(constraints.len(), 2);
+    }
+
+    #[test]
+    fn an_action_the_engine_spells_differently_is_kept_verbatim() {
+        let rows = vec![(
+            "fk1".to_string(),
+            "a".to_string(),
+            "t".to_string(),
+            "x".to_string(),
+            "UNKNOWN".to_string(),
+            "NO ACTION".to_string(),
+        )];
+        let constraints = group_foreign_keys(rows);
+        if let crate::catalog::Constraint::ForeignKey { on_delete, .. } = &constraints[0] {
+            assert_eq!(on_delete.to_string(), "UNKNOWN");
+        } else {
+            panic!("expected foreign key");
+        }
     }
 }

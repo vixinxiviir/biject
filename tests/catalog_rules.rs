@@ -89,16 +89,53 @@ fn assert_reads_rules(catalog: &TableCatalog, engine: &str) {
         catalog.indexes
     );
 
-    // Both servers expose every kind of rule; what is unread here is unread
-    // because the connector does not read it yet, not because the engine will
-    // not say. Asserted exactly rather than as "contains foreign keys": when
-    // 0.9b lands, this fails and has to be updated, which is the point of
-    // writing it down.
-    assert_eq!(
-        catalog.unread,
-        vec![ConstraintKind::ForeignKey],
-        "{engine}: foreign keys are the only kind these connectors do not read yet"
+    // Both servers expose every kind of rule; after 0.9b foreign keys are read,
+    // so there should be nothing unread.
+    assert!(
+        catalog.unread.is_empty(),
+        "{engine}: foreign keys should be read now, but unread contains: {:?}",
+        catalog.unread
     );
+
+    // Foreign key coverage.
+    let fks = kinds(catalog, ConstraintKind::ForeignKey);
+    assert_eq!(
+        fks.len(),
+        1,
+        "{engine}: expected one foreign key, got {:?}",
+        fks
+    );
+    let fk = fks[0];
+    match fk {
+        biject::catalog::Constraint::ForeignKey {
+            columns,
+            referenced_table,
+            referenced_columns,
+            on_delete,
+            on_update,
+            ..
+        } => {
+            assert_eq!(
+                columns,
+                &vec![String::from("ref_id")],
+                "{engine}: foreign key columns"
+            );
+            // Referenced table name is schema-qualified on SQL Server, bare on MySQL.
+            assert!(
+                referenced_table.ends_with("fk_ref"),
+                "{engine}: referenced table should end with fk_ref, got {referenced_table}"
+            );
+            assert_eq!(
+                referenced_columns,
+                &vec![String::from("id")],
+                "{engine}: referenced columns"
+            );
+            // Actions are read as declared.
+            assert_eq!(on_delete.to_string(), "CASCADE", "{engine}: on delete");
+            assert_eq!(on_update.to_string(), "NO ACTION", "{engine}: on update");
+        }
+        _ => panic!("expected foreign key"),
+    }
 }
 
 fn assert_missing_rules_are_reported(source: &TableCatalog, target: &TableCatalog, engine: &str) {
@@ -152,21 +189,26 @@ mod mysql {
         let statements = [
             "DROP TABLE IF EXISTS rules_source",
             "DROP TABLE IF EXISTS rules_target",
+            "DROP TABLE IF EXISTS fk_ref",
+            "CREATE TABLE fk_ref (id BIGINT PRIMARY KEY)",
             "CREATE TABLE rules_source (
                id BIGINT NOT NULL,
                email VARCHAR(50) NOT NULL,
                region VARCHAR(20),
                amount DECIMAL(12,2),
+               ref_id BIGINT,
                PRIMARY KEY (id),
                UNIQUE KEY rules_email_key (email),
-               CONSTRAINT rules_amount_ck CHECK (amount > 0)
+               CONSTRAINT rules_amount_ck CHECK (amount > 0),
+               CONSTRAINT rules_fk FOREIGN KEY (ref_id) REFERENCES fk_ref(id) ON DELETE CASCADE ON UPDATE NO ACTION
              )",
             "CREATE INDEX rules_region_idx ON rules_source (region)",
             "CREATE TABLE rules_target (
                id BIGINT NOT NULL,
                email VARCHAR(50) NOT NULL,
                region VARCHAR(20),
-               amount DECIMAL(12,2)
+               amount DECIMAL(12,2),
+               ref_id BIGINT
              )",
         ];
 
@@ -234,23 +276,28 @@ mod sqlserver {
         };
 
         const DDL: &str = "
+            IF OBJECT_ID('dbo.fk_ref','U') IS NOT NULL DROP TABLE dbo.fk_ref;
             IF OBJECT_ID('dbo.rules_source','U') IS NOT NULL DROP TABLE dbo.rules_source;
             IF OBJECT_ID('dbo.rules_target','U') IS NOT NULL DROP TABLE dbo.rules_target;
+            CREATE TABLE dbo.fk_ref (id BIGINT PRIMARY KEY);
             CREATE TABLE dbo.rules_source (
               id BIGINT NOT NULL,
               email VARCHAR(50) NOT NULL,
               region VARCHAR(20),
               amount DECIMAL(12,2),
+              ref_id BIGINT,
               CONSTRAINT rules_pkey PRIMARY KEY (id),
               CONSTRAINT rules_email_key UNIQUE (email),
-              CONSTRAINT rules_amount_ck CHECK (amount > 0)
+              CONSTRAINT rules_amount_ck CHECK (amount > 0),
+              CONSTRAINT rules_fk FOREIGN KEY (ref_id) REFERENCES dbo.fk_ref(id) ON DELETE CASCADE ON UPDATE NO ACTION
             );
             CREATE INDEX rules_region_idx ON dbo.rules_source (region);
             CREATE TABLE dbo.rules_target (
               id BIGINT NOT NULL,
               email VARCHAR(50) NOT NULL,
               region VARCHAR(20),
-              amount DECIMAL(12,2)
+              amount DECIMAL(12,2),
+              ref_id BIGINT
             );";
 
         // Connecting to a named database, then to the fixture database. The
