@@ -6,6 +6,46 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 
+/// Parts of a schema this tool does not examine.
+///
+/// Static, not a runtime finding. `CatalogAvailability` reports a catalog that
+/// could not be read and `TableCatalog::unread` reports a kind this engine
+/// would not give up; both are about a particular run. This is about the tool:
+/// these are never compared, on any engine, however well the catalog reads.
+///
+/// Printed with every comparison, because "no differences found" and "no
+/// differences among the things I looked at" are different statements and the
+/// reader cannot tell them apart otherwise.
+const NOT_COMPARED: &[&str] = &[
+    "triggers",
+    "views and materialised views",
+    "generated and computed column expressions",
+    "identity, sequence and auto-increment settings",
+    "collations and character sets",
+    "table and column comments",
+    "partitioning",
+    "storage parameters, tablespaces and fill factors",
+    "grants and row-level security policies",
+    "anything in a table other than the one named",
+];
+
+/// What a schema comparison does examine.
+fn compared() -> Vec<String> {
+    let mut result = vec![
+        "column names".to_string(),
+        "declared types".to_string(),
+        "nullability".to_string(),
+        "defaults".to_string(),
+        "ordinal position".to_string(),
+    ];
+
+    for kind in ConstraintKind::ALL {
+        result.push(format!("{kind}"));
+    }
+
+    result
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TypeChangeImpact {
     SafePromotion,
@@ -106,6 +146,12 @@ pub struct SchemaDiffResult {
     pub metadata: MetadataReport,
     pub policy_violations: Vec<String>,
     pub policy_passed: Option<bool>,
+    /// What this comparison examined, and what it never examines.
+    ///
+    /// Not optional, and never skipped when serialising. A result that does
+    /// not say how much of a schema it covered is the thing this field exists
+    /// to prevent, and an `Option` would let one be built.
+    pub scope: Scope,
 }
 
 /// Catalog-derived findings, and the availability that produced them.
@@ -156,6 +202,63 @@ impl MetadataReport {
         }
         unread
     }
+}
+
+/// What a schema comparison covers, and what it never covers.
+#[derive(Debug, Clone, Serialize)]
+pub struct Scope {
+    /// What the tool compared.
+    pub compared: Vec<String>,
+    /// What the tool never looked at, on any engine.
+    pub not_compared: Vec<String>,
+}
+
+impl Scope {
+    /// The scope of every schema comparison this version performs.
+    ///
+    /// A constant in all but name. It is a method so that the constraint half
+    /// is derived from `ConstraintKind::ALL` rather than typed out, which is
+    /// what stops the list going stale when a kind is added.
+    pub fn of_this_tool() -> Self {
+        Self {
+            compared: compared(),
+            not_compared: NOT_COMPARED.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+/// What a comparison did not look at, wrapped for a terminal.
+///
+/// Factored out so the report and its tests cannot disagree about the wording.
+/// Wrapped because the unwrapped form is a single 300-character line, and a
+/// footer that has to be read is worth the twenty lines of arithmetic.
+fn scope_footer() -> String {
+    wrapped(&format!("Not compared: {}", NOT_COMPARED.join(", ")), 78)
+}
+
+/// Break `text` on spaces so no line exceeds `width`, where one can.
+///
+/// A word longer than `width` is left over-long rather than split: breaking it
+/// would change what it says.
+fn wrapped(text: &str, width: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines.join(
+        "
+",
+    )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -330,6 +433,7 @@ fn run_schema_diff_inner(
         metadata,
         policy_violations,
         policy_passed,
+        scope: Scope::of_this_tool(),
     })
 }
 
@@ -375,6 +479,10 @@ pub fn schema_diff(
     render_schema_report(&result, policy_path);
 
     if let (Some(path), Some(format)) = (output, format) {
+        // The CSV file itself is left alone: its rows are a change list with a
+        // fixed header, and prose in them would corrupt something meant to be
+        // read by another program. The scope reaches the person who ran the
+        // command through the report above, which is printed either way.
         export_schema(path, format, &result)?;
         println!(
             "
@@ -653,6 +761,12 @@ fn render_schema_report(result: &SchemaDiffResult, policy_path: Option<&str>) {
             }
         }
     }
+
+    // Printed whether or not anything was found. A clean comparison is the run
+    // that most needs it: "no differences" and "no differences among the things
+    // I looked at" are different statements.
+    println!();
+    println!("{}", scope_footer());
 }
 
 /// Print catalog findings, or say why there are none.
@@ -917,10 +1031,10 @@ fn load_policy(path: &str) -> Result<SchemaPolicy> {
     if let Some(constraints) = &policy.require_constraints {
         for name in constraints {
             match name.as_str() {
-                "primary_key" | "unique" | "check" | "index" => {}
+                "primary_key" | "unique" | "check" | "index" | "foreign_key" => {}
                 _ => {
                     return Err(anyhow!(
-                        "Invalid constraint kind '{}' in policy, valid values are: primary_key, unique, check, index",
+                        "Invalid constraint kind '{}' in policy, valid values are: primary_key, unique, check, index, foreign_key",
                         name
                     ));
                 }
@@ -1014,6 +1128,7 @@ fn evaluate_policy(
                 "unique" => crate::catalog::ConstraintKind::Unique,
                 "check" => crate::catalog::ConstraintKind::Check,
                 "index" => crate::catalog::ConstraintKind::Index,
+                "foreign_key" => crate::catalog::ConstraintKind::ForeignKey,
                 _ => continue,
             };
             // Unread kinds must not pass silently
@@ -1286,6 +1401,7 @@ mod export_tests {
             metadata,
             policy_violations: vec![],
             policy_passed: None,
+            scope: Scope::of_this_tool(),
         }
     }
 
@@ -1851,6 +1967,7 @@ mod fail_on_tests {
             metadata,
             policy_violations: vec![],
             policy_passed: None,
+            scope: Scope::of_this_tool(),
         }
     }
 
@@ -1948,6 +2065,7 @@ mod fail_on_tests {
             metadata,
             policy_violations: vec![],
             policy_passed: None,
+            scope: Scope::of_this_tool(),
         };
         let warning = build_fail_on_warning(&result);
         assert!(warning.is_some());
@@ -1961,5 +2079,191 @@ mod fail_on_tests {
         // without running schema_diff. The test asserts the error variant exists.
         let err = SchemaDiffError::PolicyViolation("test".into());
         assert!(format!("{}", err).contains("Schema policy violation"));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use crate::catalog::{CatalogAvailability, TableCatalog};
+
+    /// A one-column frame. The comparison needs frames; nothing here is about
+    /// their contents.
+    /// The footer with its line breaks flattened back to single spaces.
+    ///
+    /// The printed form wraps, so an entry like "storage parameters,
+    /// tablespaces and fill factors" is split across two lines and no longer
+    /// appears verbatim. Asserting on the flattened form checks the wording
+    /// without pinning the wrapping.
+    fn footer_text() -> String {
+        scope_footer()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn frame() -> DataFrame {
+        DataFrame::new(vec![Series::new("id", &["1"])]).unwrap()
+    }
+
+    #[test]
+    fn every_constraint_kind_appears_in_what_the_report_claims_to_compare() {
+        // The list of what is compared is half typed out and half derived from
+        // ConstraintKind::ALL. This is what makes the derived half load-bearing:
+        // add a kind without touching this file and the build fails here rather
+        // than the report quietly under-claiming.
+        let claimed = compared();
+        for kind in ConstraintKind::ALL {
+            let label = kind.to_string();
+            assert!(claimed.contains(&label), "{label} missing from {claimed:?}");
+        }
+    }
+
+    #[test]
+    fn a_clean_comparison_still_says_what_it_did_not_look_at() {
+        let result = run_schema_diff_frames(frame(), frame(), "source", "target").unwrap();
+
+        assert!(result.added.is_empty());
+        assert!(result.removed.is_empty());
+        assert!(result.metadata.changes.is_empty());
+
+        assert!(!result.scope.not_compared.is_empty());
+        assert!(result.scope.not_compared.contains(&"triggers".to_string()));
+        assert!(footer_text().contains("triggers"));
+    }
+
+    #[test]
+    fn a_comparison_with_no_catalog_at_all_still_says_it() {
+        // Two CSVs. There is no catalog to read on either side, which is the
+        // run whose reader most needs to know how much was covered.
+        let result = run_schema_diff_frames_with_catalog(
+            frame(),
+            frame(),
+            "source",
+            "target",
+            CatalogAvailability::NotADatabase,
+            CatalogAvailability::NotADatabase,
+        )
+        .unwrap();
+
+        assert!(!result.metadata.is_complete());
+        assert!(!result.scope.not_compared.is_empty());
+        assert!(!result.scope.compared.is_empty());
+    }
+
+    #[test]
+    fn the_footer_is_separate_from_the_reasons_metadata_was_unavailable() {
+        // `gaps` is about this run: one side had no catalog. The footer is
+        // about the tool: these things are never read on any run. Neither may
+        // absorb the other, or a reader would take a fixable gap for a
+        // permanent limit.
+        let result = run_schema_diff_frames_with_catalog(
+            frame(),
+            frame(),
+            "source",
+            "target",
+            CatalogAvailability::NotADatabase,
+            CatalogAvailability::Available(TableCatalog::default()),
+        )
+        .unwrap();
+
+        let gaps = result.metadata.gaps();
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        for entry in NOT_COMPARED {
+            for (_, reason) in &gaps {
+                assert!(!reason.contains(entry), "{entry} leaked into {reason}");
+            }
+        }
+        let footer = footer_text();
+        for entry in NOT_COMPARED {
+            assert!(footer.contains(entry), "{entry} missing from footer");
+        }
+    }
+
+    #[test]
+    fn the_footer_wraps_but_says_the_same_thing() {
+        for line in scope_footer().lines() {
+            assert!(line.chars().count() <= 78, "{line}");
+        }
+        let footer = footer_text();
+        for entry in NOT_COMPARED {
+            assert!(footer.contains(entry), "{entry} lost in wrapping");
+        }
+    }
+
+    #[test]
+    fn a_word_longer_than_the_width_is_left_alone_rather_than_broken() {
+        // Breaking a word to fit would change what it says.
+        assert_eq!(wrapped("supercalifragilistic", 5), "supercalifragilistic");
+        assert_eq!(
+            wrapped("a b c", 3),
+            "a b
+c"
+        );
+    }
+
+    #[test]
+    fn the_json_result_carries_both_halves_of_the_scope() {
+        let result = run_schema_diff_frames(frame(), frame(), "source", "target").unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+
+        let scope = json.get("scope").expect("scope is not optional");
+        assert!(!scope["compared"].as_array().unwrap().is_empty());
+        assert!(!scope["not_compared"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_csv_export_is_unchanged_by_this() {
+        // The CSV is a change list read by other programs. Prose belongs in the
+        // report, not in the rows. Both catalogs are available so that the only
+        // thing that could add a row is the footer.
+        let result = run_schema_diff_frames_with_catalog(
+            frame(),
+            frame(),
+            "source",
+            "target",
+            CatalogAvailability::Available(TableCatalog::default()),
+            CatalogAvailability::Available(TableCatalog::default()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            schema_csv_rows(&result),
+            vec!["category,subject,detail,from,to,breaking"]
+        );
+
+        // A run that *does* have something to say about metadata still says it
+        // in rows, as it always did. Only the static footer stays out.
+        let with_gaps = run_schema_diff_frames(frame(), frame(), "source", "target").unwrap();
+        let rows = schema_csv_rows(&with_gaps);
+        assert!(rows.iter().any(|r| r.starts_with("metadata_not_compared")));
+        for entry in NOT_COMPARED {
+            assert!(
+                !rows.iter().any(|r| r.contains(entry)),
+                "{entry} in the CSV"
+            );
+        }
+    }
+
+    #[test]
+    fn foreign_key_is_a_valid_constraint_kind_in_a_policy() {
+        // Through `load_policy` itself. Re-stating its match here would test a
+        // copy, and pass just as well with the real one left unchanged.
+        let dir = std::env::temp_dir();
+
+        let good = dir.join("biject_policy_fk_good.json");
+        std::fs::write(&good, r#"{"require_constraints":["foreign_key"]}"#).unwrap();
+        assert!(load_policy(good.to_str().unwrap()).is_ok());
+        std::fs::remove_file(&good).ok();
+
+        let bad = dir.join("biject_policy_fk_bad.json");
+        std::fs::write(&bad, r#"{"require_constraints":["reference"]}"#).unwrap();
+        let err = load_policy(bad.to_str().unwrap()).unwrap_err().to_string();
+        std::fs::remove_file(&bad).ok();
+
+        for kind in ["primary_key", "unique", "check", "index", "foreign_key"] {
+            assert!(err.contains(kind), "{kind} missing from: {err}");
+        }
     }
 }

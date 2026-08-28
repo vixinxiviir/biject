@@ -140,6 +140,33 @@ and `PK__customer__3213E83F` on SQL Server. Losing a rule the source enforces is
 breaking — the target can then hold data the source could not. A missing index
 is reported but is never breaking, because it is slow rather than wrong.
 
+**Scope of Comparison**
+
+`biject schema` compares column names, declared types, nullability, defaults,
+ordinal position, and table rules: primary keys, unique constraints, check
+constraints, indexes and foreign keys. It does not compare:
+
+- Triggers
+- Views and materialised views
+- Generated and computed column expressions
+- Identity, sequence and auto-increment settings
+- Collations and character sets
+- Table and column comments
+- Partitioning
+- Storage parameters, tablespaces and fill factors
+- Grants and row-level security policies
+- Anything in a table other than the one named
+
+Most of those are in the catalog and could be read; they are not read yet. The
+list is printed at the end of every comparison, because "no differences found"
+and "no differences among the things I looked at" are different statements and
+nothing else in the output distinguishes them.
+
+It is separate from the report's other honesty: a run also says when a catalog
+could not be read at all, and when a particular kind of rule could not be read
+from a particular engine. Those are about that run. This list is about the tool,
+and is the same on every run.
+
 ### 2. Data Diffing with Primary Keys
 
 Find which rows were added, removed, or modified:
