@@ -27,10 +27,10 @@ the 0.7 ones and of each other, so any of them can be picked up at any time.
 | [0.7-canonical-type-names](0.7-canonical-type-names.md) | Done — `3f3ad84` | — |
 | [0.7a-dialect-and-identifier-quoting](0.7a-dialect-and-identifier-quoting.md) | Done — `a1c3413` | — |
 | [0.7b-render-common-types](0.7b-render-common-types.md) | Done — `a1c3413` | 0.7a |
-| [0.7c-render-remaining-types](0.7c-render-remaining-types.md) | **Not started — handed out but not implemented** | 0.7b |
+| [0.7c-render-remaining-types](0.7c-render-remaining-types.md) | Done — `59aa438` | 0.7b |
 | [0.8a-schema-without-downloading-rows](0.8a-schema-without-downloading-rows.md) | Done | — |
 | [0.8b-policy-rules-for-constraints](0.8b-policy-rules-for-constraints.md) | Done | — |
-| [0.8c-fail-on-flag](0.8c-fail-on-flag.md) | Ready | — |
+| [0.8c-fail-on-flag](0.8c-fail-on-flag.md) | Done — `1b74292` | — |
 | 0.7d — `migrate` emits MySQL and SQL Server DDL | Not specced — **not for the local implementer** | 0.7a, 0.7b, 0.7c |
 
 ### Which to hand out first
