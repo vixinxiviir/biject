@@ -27,7 +27,7 @@ Order matters only where "depends on" says so.
 | --- | --- | --- |
 | [0.9a-foreign-keys-model-and-postgres](0.9a-foreign-keys-model-and-postgres.md) | Done — `d4e826c` | — |
 | [0.9b-foreign-keys-remaining-engines](0.9b-foreign-keys-remaining-engines.md) | Done — `b5a608e` | 0.9a |
-| [0.9c-name-what-is-not-compared](0.9c-name-what-is-not-compared.md) | Open | 0.9a, 0.9b |
+| [0.9c-name-what-is-not-compared](0.9c-name-what-is-not-compared.md) | Done — `bbddb97` | 0.9a, 0.9b |
 | [0.9d-document-the-api-database-half](0.9d-document-the-api-database-half.md) | Open | 0.9a, 0.9b |
 | [0.9e-document-the-api-command-half](0.9e-document-the-api-command-half.md) | Open | 0.9d |
 | [0.9f-freeze-the-public-api](0.9f-freeze-the-public-api.md) | Open | 0.9a, 0.9b, 0.9c |
@@ -143,6 +143,16 @@ knowledge about databases rather than migration generation:
 - The upside: that fabricated demo was the thread that led to the keyword bug,
   which had silently disabled catalog reading for any table whose name begins
   with `select` or `with` on every engine since 0.5.
+- **Tests that assert on a fixture instead of on the code.** Three specs in a
+  row now. 0.9b wrote the grouping twice; 0.9c built a `Scope` by hand and then
+  asserted the literal it had just written was non-empty, and restated
+  `load_policy`'s validation inside the test that was meant to check it. Every
+  one of them would pass with the shipped path broken. **A spec that lists tests
+  must say which function each one calls**, not only what it asserts.
+- **`Option` on a field that must always be present.** 0.9c made the scope
+  optional so that hand-built test fixtures would compile. That let a result
+  exist that said nothing about its own coverage, which is the exact thing the
+  field was added to prevent. Watch for a type weakened to suit a test.
 - **Duplicated logic in a test module is worse than no test.** 0.9b wrote the
   foreign key grouping twice in MySQL and again twice in SQL Server: once in the
   connector, once inside `mod tests`. Four unit tests per connector exercised the

@@ -57,6 +57,13 @@ than just that it is missing, that is why.
   comment that stops someone undoing your work in six months: the constraint you
   hit, the alternative you rejected, the failure that made this necessary. Skip
   the comment entirely if the code already says it.
+- **A test must call the code it is about.** Do not copy a function into the
+  test module and test the copy, do not restate a `match` from the code inside
+  the test that checks it, and do not build a value by hand and then assert that
+  the value you just wrote has the contents you gave it. Each of those passes
+  just as well with the shipped code broken, which makes it worse than no test:
+  it reports safety that is not there. If reaching the real function is awkward,
+  say so rather than testing something easier.
 - **Test names are sentences about behaviour**, not about functions.
   `an_integer_display_width_is_not_capacity`, not `test_canonical_int`. Match the
   naming and comment style of the tests already in the file.
