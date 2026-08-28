@@ -25,7 +25,7 @@ Order matters only where "depends on" says so.
 
 | Spec | Status | Depends on |
 | --- | --- | --- |
-| [0.9a-foreign-keys-model-and-postgres](0.9a-foreign-keys-model-and-postgres.md) | Open | — |
+| [0.9a-foreign-keys-model-and-postgres](0.9a-foreign-keys-model-and-postgres.md) | Done — `d4e826c` | — |
 | [0.9b-foreign-keys-remaining-engines](0.9b-foreign-keys-remaining-engines.md) | Open | 0.9a |
 | [0.9c-name-what-is-not-compared](0.9c-name-what-is-not-compared.md) | Open | 0.9a, 0.9b |
 | [0.9d-document-the-api-database-half](0.9d-document-the-api-database-half.md) | Open | 0.9a, 0.9b |
