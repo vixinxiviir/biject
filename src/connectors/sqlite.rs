@@ -1,4 +1,4 @@
-use super::ConnectorError;
+use super::{starts_with_keyword, ConnectorError};
 use crate::catalog::{
     CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, TableCatalog,
 };
@@ -556,7 +556,7 @@ fn load_catalog(
 pub(crate) fn split_table_reference(query: &str) -> Option<(Option<String>, String)> {
     let trimmed = query.trim().trim_end_matches(';').trim();
     let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+    if starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH") {
         return None;
     }
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
@@ -578,7 +578,7 @@ pub(crate) fn split_table_reference(query: &str) -> Option<(Option<String>, Stri
 fn normalize_query(query: &str) -> String {
     let trimmed = query.trim();
     let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+    if starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH") {
         trimmed.to_string()
     } else {
         format!("SELECT * FROM {}", trimmed)
@@ -589,7 +589,7 @@ fn normalize_query(query: &str) -> String {
 fn schema_query(query: &str) -> String {
     let trimmed = query.trim();
     let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+    if starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH") {
         format!("SELECT * FROM ({}) AS biject_schema_probe LIMIT 0", trimmed)
     } else {
         format!("SELECT * FROM {} LIMIT 0", trimmed)
@@ -600,7 +600,7 @@ fn schema_query(query: &str) -> String {
 pub fn load_schema(path: &str, query: &str) -> Result<DataFrame, ConnectorError> {
     let trimmed = query.trim();
     let upper = trimmed.to_uppercase();
-    let is_statement = upper.starts_with("SELECT") || upper.starts_with("WITH");
+    let is_statement = starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH");
     let schema_sql = schema_query(query);
 
     match load(path, &schema_sql) {
@@ -814,6 +814,21 @@ mod tests {
         assert_eq!(split_table_reference(""), None);
         assert_eq!(split_table_reference("schema."), None);
         assert_eq!(split_table_reference(".table"), None);
+    }
+
+    #[test]
+    fn a_table_named_after_a_keyword_is_still_a_table() {
+        // `with_fk` begins with WITH. Reading it as a common table expression
+        // meant no catalog was read for a table that was right there, and the
+        // report blamed a SELECT nobody had written.
+        assert_eq!(
+            split_table_reference("with_fk"),
+            Some((None, "with_fk".to_string()))
+        );
+        assert_eq!(
+            split_table_reference("selections"),
+            Some((None, "selections".to_string()))
+        );
     }
 
     #[test]

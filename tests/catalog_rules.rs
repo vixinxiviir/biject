@@ -187,6 +187,8 @@ mod mysql {
         use mysql_async::prelude::Queryable;
 
         let statements = [
+            // Children before parents. A foreign key makes DROP TABLE
+            // ordered, so fk_ref has to go last.
             "DROP TABLE IF EXISTS rules_source",
             "DROP TABLE IF EXISTS rules_target",
             "DROP TABLE IF EXISTS fk_ref",
@@ -276,9 +278,12 @@ mod sqlserver {
         };
 
         const DDL: &str = "
-            IF OBJECT_ID('dbo.fk_ref','U') IS NOT NULL DROP TABLE dbo.fk_ref;
+            -- Children before parents. A foreign key makes DROP TABLE ordered,
+            -- so dropping fk_ref first fails once rules_source exists — which
+            -- is to say, on every run after the first.
             IF OBJECT_ID('dbo.rules_source','U') IS NOT NULL DROP TABLE dbo.rules_source;
             IF OBJECT_ID('dbo.rules_target','U') IS NOT NULL DROP TABLE dbo.rules_target;
+            IF OBJECT_ID('dbo.fk_ref','U') IS NOT NULL DROP TABLE dbo.fk_ref;
             CREATE TABLE dbo.fk_ref (id BIGINT PRIMARY KEY);
             CREATE TABLE dbo.rules_source (
               id BIGINT NOT NULL,

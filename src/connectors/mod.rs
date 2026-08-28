@@ -443,6 +443,24 @@ fn parse_db_userinfo_netloc(
     ))
 }
 
+/// Whether an already-uppercased query begins with `keyword` as a whole word.
+///
+/// `starts_with("WITH")` on its own is not that test, and the difference is a
+/// real bug: a table named `with_fk` — or `withholding`, or `selections` — was
+/// read as a common table expression or a `SELECT`, so no catalog was looked
+/// up for it and the report said "the query is a SELECT rather than a table
+/// reference" about a table that was sitting right there.
+///
+/// A keyword ends at the end of the input or at any character that cannot
+/// continue an identifier. `SELECT*FROM t` is a statement; `SELECTED` is a
+/// table.
+pub(crate) fn starts_with_keyword(upper: &str, keyword: &str) -> bool {
+    match upper.strip_prefix(keyword) {
+        Some(rest) => !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'),
+        None => false,
+    }
+}
+
 /// Derive the filesystem path from the portion of a `sqlite://` URI after the scheme.
 fn sqlite_path_from_rest(rest: &str) -> String {
     if rest.starts_with('/') {
@@ -456,4 +474,40 @@ fn sqlite_path_from_rest(rest: &str) -> String {
         }
     }
     rest.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_table_whose_name_begins_with_a_keyword_is_not_a_statement() {
+        // The bug this exists to stop: `withholding` and `selections` are
+        // ordinary table names, and reading them as SQL meant no catalog was
+        // looked up and the report blamed a SELECT that was never written.
+        for name in [
+            "WITH_FK",
+            "WITHOUT_FK",
+            "WITHHOLDING",
+            "SELECTIONS",
+            "SELECTED_ITEMS",
+            "WITH2",
+        ] {
+            assert!(!starts_with_keyword(name, "WITH"), "{name}");
+            assert!(!starts_with_keyword(name, "SELECT"), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_keyword_followed_by_anything_that_cannot_continue_a_name_is_a_statement() {
+        assert!(starts_with_keyword("SELECT * FROM t", "SELECT"));
+        assert!(starts_with_keyword("SELECT*FROM t", "SELECT"));
+        assert!(starts_with_keyword(
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "WITH"
+        ));
+        assert!(starts_with_keyword("WITH(SELECT 1)", "WITH"));
+        // A bare keyword is a broken statement, not a table anybody named.
+        assert!(starts_with_keyword("SELECT", "SELECT"));
+    }
 }

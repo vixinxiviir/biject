@@ -1,4 +1,4 @@
-use super::ConnectorError;
+use super::{starts_with_keyword, ConnectorError};
 use crate::catalog::{
     CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, ReferentialAction,
     TableCatalog,
@@ -534,7 +534,7 @@ async fn load_catalog(
 pub(crate) fn split_table_reference(query: &str, database: &str) -> Option<(String, String)> {
     let trimmed = query.trim().trim_end_matches(';').trim();
     let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+    if starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH") {
         return None;
     }
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
@@ -556,7 +556,7 @@ pub(crate) fn split_table_reference(query: &str, database: &str) -> Option<(Stri
 fn normalize_query(query: &str) -> String {
     let trimmed = query.trim();
     let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+    if starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH") {
         trimmed.to_string()
     } else {
         format!("SELECT * FROM {}", trimmed)
@@ -567,7 +567,7 @@ fn normalize_query(query: &str) -> String {
 fn schema_query(query: &str) -> String {
     let trimmed = query.trim();
     let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT") || upper.starts_with("WITH") {
+    if starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH") {
         format!("SELECT * FROM ({}) AS biject_schema_probe LIMIT 0", trimmed)
     } else {
         format!("SELECT * FROM {} LIMIT 0", trimmed)
@@ -585,7 +585,7 @@ pub async fn load_schema_async(
 ) -> Result<DataFrame, ConnectorError> {
     let trimmed = query.trim();
     let upper = trimmed.to_uppercase();
-    let is_statement = upper.starts_with("SELECT") || upper.starts_with("WITH");
+    let is_statement = starts_with_keyword(&upper, "SELECT") || starts_with_keyword(&upper, "WITH");
     let schema_sql = schema_query(query);
 
     match load_async(host, port, database, username, password, &schema_sql).await {
