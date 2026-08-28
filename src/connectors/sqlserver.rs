@@ -1,5 +1,7 @@
 use super::ConnectorError;
-use crate::catalog::{CatalogAvailability, ColumnDef, Constraint, IndexDef, TableCatalog};
+use crate::catalog::{
+    CatalogAvailability, ColumnDef, Constraint, ConstraintKind, IndexDef, TableCatalog,
+};
 use futures_util::TryStreamExt;
 use polars::prelude::*;
 use tiberius::{AuthMethod, Client, ColumnData, ColumnType, Config, QueryItem, Row};
@@ -564,7 +566,10 @@ async fn load_catalog(
     Ok(Some(
         TableCatalog::new(columns)
             .with_constraints(constraints)
-            .with_indexes(indexes),
+            .with_indexes(indexes)
+            // Modelled but not yet read here. Declared unread rather than left
+            // out, so an empty list does not read as "this table has none".
+            .with_unread(vec![ConstraintKind::ForeignKey]),
     ))
 }
 

@@ -39,11 +39,10 @@ pub struct ColumnDef {
 /// A rule the table enforces about its own rows.
 ///
 /// Deliberately table-local: every kind here mentions only this table's own
-/// columns. **Foreign keys are not modelled.** They point at another table, and
-/// everything that consumes a catalog here works on one table at a time, so a
-/// key referencing something nobody has looked at could be reported but never
-/// acted on — and generating DDL for one means ordering work across tables,
-/// which is a different program from this one.
+/// columns. Foreign keys reference another table, which is recorded as a name
+/// only — nothing connects to it, reads its catalog, or checks that it exists.
+/// Generating DDL for one means ordering work across tables, which is a
+/// different program from this one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Constraint {
@@ -66,6 +65,27 @@ pub enum Constraint {
         name: String,
         expression: String,
     },
+    /// A reference from this table's columns to another table's.
+    ///
+    /// `referenced_table` is the engine's own spelling. PostgreSQL reports
+    /// `public.customers`, SQL Server `dbo.customers`, SQLite a bare
+    /// `customers`. Two identical keys therefore compare unequal across
+    /// engines. That is a known limit of comparing two different engines and
+    /// is not something to normalise away here — guessing that `public` and
+    /// `dbo` mean the same thing is a claim about someone's schema layout, not
+    /// a fact.
+    ForeignKey {
+        name: String,
+        /// Columns in *this* table, in key order.
+        columns: Vec<String>,
+        /// The table referenced, as the engine reports it. Schema-qualified when
+        /// the engine gives a schema.
+        referenced_table: String,
+        /// Columns in the referenced table, paired positionally with `columns`.
+        referenced_columns: Vec<String>,
+        on_delete: ReferentialAction,
+        on_update: ReferentialAction,
+    },
 }
 
 /// A kind of table-level rule.
@@ -84,14 +104,16 @@ pub enum ConstraintKind {
     Unique,
     Check,
     Index,
+    ForeignKey,
 }
 
 impl ConstraintKind {
-    pub const ALL: [ConstraintKind; 4] = [
+    pub const ALL: [ConstraintKind; 5] = [
         ConstraintKind::PrimaryKey,
         ConstraintKind::Unique,
         ConstraintKind::Check,
         ConstraintKind::Index,
+        ConstraintKind::ForeignKey,
     ];
 }
 
@@ -102,8 +124,40 @@ impl fmt::Display for ConstraintKind {
             ConstraintKind::Unique => "unique constraints",
             ConstraintKind::Check => "check constraints",
             ConstraintKind::Index => "indexes",
+            ConstraintKind::ForeignKey => "foreign keys",
         };
         f.write_str(label)
+    }
+}
+
+/// What the database does to the referencing rows when the referenced row is
+/// deleted or its key updated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferentialAction {
+    NoAction,
+    Restrict,
+    Cascade,
+    SetNull,
+    SetDefault,
+    /// Something the engine reported that this does not recognise.
+    ///
+    /// Carries the engine's own text. A value folded into `NoAction` because
+    /// it was not in the list would be a silent claim about what happens to
+    /// real rows on a real delete.
+    Other(String),
+}
+
+impl fmt::Display for ReferentialAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReferentialAction::NoAction => write!(f, "NO ACTION"),
+            ReferentialAction::Restrict => write!(f, "RESTRICT"),
+            ReferentialAction::Cascade => write!(f, "CASCADE"),
+            ReferentialAction::SetNull => write!(f, "SET NULL"),
+            ReferentialAction::SetDefault => write!(f, "SET DEFAULT"),
+            ReferentialAction::Other(s) => write!(f, "{s}"),
+        }
     }
 }
 
@@ -113,6 +167,7 @@ impl Constraint {
             Constraint::PrimaryKey { .. } => ConstraintKind::PrimaryKey,
             Constraint::Unique { .. } => ConstraintKind::Unique,
             Constraint::Check { .. } => ConstraintKind::Check,
+            Constraint::ForeignKey { .. } => ConstraintKind::ForeignKey,
         }
     }
 
@@ -120,14 +175,19 @@ impl Constraint {
         match self {
             Constraint::PrimaryKey { name, .. }
             | Constraint::Unique { name, .. }
-            | Constraint::Check { name, .. } => name,
+            | Constraint::Check { name, .. }
+            | Constraint::ForeignKey { name, .. } => name,
         }
     }
 
-    /// The columns a constraint covers, empty for a `CHECK`.
+    /// The columns a constraint covers, empty for a `CHECK`. A foreign key
+    /// reports the columns on this side, because that is the side this table
+    /// is being compared on.
     pub fn columns(&self) -> &[String] {
         match self {
-            Constraint::PrimaryKey { columns, .. } | Constraint::Unique { columns, .. } => columns,
+            Constraint::PrimaryKey { columns, .. }
+            | Constraint::Unique { columns, .. }
+            | Constraint::ForeignKey { columns, .. } => columns,
             Constraint::Check { .. } => &[],
         }
     }
@@ -144,6 +204,22 @@ impl Constraint {
             Constraint::PrimaryKey { columns, .. } => ("primary_key", columns.join(",")),
             Constraint::Unique { columns, .. } => ("unique", columns.join(",")),
             Constraint::Check { expression, .. } => ("check", normalize_expression(expression)),
+            Constraint::ForeignKey {
+                columns,
+                referenced_table,
+                referenced_columns,
+                on_delete,
+                on_update,
+                ..
+            } => {
+                let cols = columns.join(",");
+                let ref_cols = referenced_columns.join(",");
+                let id = format!(
+                    "{} -> {}({}) ON DELETE {} ON UPDATE {}",
+                    cols, referenced_table, ref_cols, on_delete, on_update
+                );
+                ("foreign_key", id)
+            }
         }
     }
 }
@@ -156,6 +232,28 @@ impl fmt::Display for Constraint {
             }
             Constraint::Unique { columns, .. } => write!(f, "UNIQUE ({})", columns.join(", ")),
             Constraint::Check { expression, .. } => write!(f, "CHECK {expression}"),
+            Constraint::ForeignKey {
+                columns,
+                referenced_table,
+                referenced_columns,
+                on_delete,
+                on_update,
+                ..
+            } => {
+                let mut s = format!(
+                    "FOREIGN KEY ({}) REFERENCES {}({})",
+                    columns.join(", "),
+                    referenced_table,
+                    referenced_columns.join(", ")
+                );
+                if *on_delete != ReferentialAction::NoAction {
+                    s.push_str(&format!(" ON DELETE {}", on_delete));
+                }
+                if *on_update != ReferentialAction::NoAction {
+                    s.push_str(&format!(" ON UPDATE {}", on_update));
+                }
+                write!(f, "{}", s)
+            }
         }
     }
 }
@@ -1011,6 +1109,24 @@ mod tests {
         }
     }
 
+    fn fk(
+        name: &str,
+        columns: &[&str],
+        referenced_table: &str,
+        referenced_columns: &[&str],
+        on_delete: ReferentialAction,
+        on_update: ReferentialAction,
+    ) -> Constraint {
+        Constraint::ForeignKey {
+            name: name.to_string(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            referenced_table: referenced_table.to_string(),
+            referenced_columns: referenced_columns.iter().map(|c| c.to_string()).collect(),
+            on_delete,
+            on_update,
+        }
+    }
+
     fn index(name: &str, columns: &[&str], unique: bool) -> IndexDef {
         IndexDef {
             name: name.to_string(),
@@ -1216,5 +1332,167 @@ mod tests {
             classify_type_change("varchar(50)", "character varying(200)"),
             TypeImpact::Widening
         );
+    }
+
+    #[test]
+    fn two_foreign_keys_onto_the_same_column_are_the_same_key_whatever_they_are_called() {
+        let source = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk_a",
+            &["id"],
+            "customers",
+            &["id"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        )]);
+        let target = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk_b",
+            &["id"],
+            "customers",
+            &["id"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        )]);
+        assert!(compare(&source, &target).is_empty());
+    }
+
+    #[test]
+    fn a_key_that_cascades_is_not_the_same_key_as_one_that_restricts() {
+        let source = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk",
+            &["id"],
+            "customers",
+            &["id"],
+            ReferentialAction::Cascade,
+            ReferentialAction::NoAction,
+        )]);
+        let target = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk",
+            &["id"],
+            "customers",
+            &["id"],
+            ReferentialAction::Restrict,
+            ReferentialAction::NoAction,
+        )]);
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 2);
+        assert!(changes
+            .iter()
+            .any(|c| matches!(c, MetadataChange::ConstraintMissing { .. })));
+        assert!(changes
+            .iter()
+            .any(|c| matches!(c, MetadataChange::ConstraintExtra { .. })));
+    }
+
+    #[test]
+    fn the_referenced_columns_pair_positionally_with_the_local_ones() {
+        let columns = vec![col("a", 1), col("b", 2)];
+        let source = TableCatalog::new(columns.clone()).with_constraints(vec![fk(
+            "fk",
+            &["a", "b"],
+            "t",
+            &["x", "y"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        )]);
+        let target = TableCatalog::new(columns).with_constraints(vec![fk(
+            "fk",
+            &["a", "b"],
+            "t",
+            &["y", "x"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        )]);
+        assert_eq!(compare(&source, &target).len(), 2);
+    }
+
+    #[test]
+    fn a_referential_action_the_engine_reports_and_this_does_not_recognise_is_kept_verbatim() {
+        let action = ReferentialAction::Other("SOMETHING".to_string());
+        assert_eq!(action.to_string(), "SOMETHING");
+        let source = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk",
+            &["id"],
+            "t",
+            &["id"],
+            action.clone(),
+            ReferentialAction::NoAction,
+        )]);
+        let target = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk",
+            &["id"],
+            "t",
+            &["id"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        )]);
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 2);
+    }
+
+    #[test]
+    fn a_foreign_key_the_target_no_longer_enforces_is_breaking() {
+        let source = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk",
+            &["id"],
+            "customers",
+            &["id"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        )]);
+        let target = TableCatalog::new(one_column());
+        let changes = compare(&source, &target);
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(
+            changes[0],
+            MetadataChange::ConstraintMissing { .. }
+        ));
+        assert!(changes[0].is_breaking());
+    }
+
+    #[test]
+    fn a_foreign_key_displays_the_side_it_points_at() {
+        let c = fk(
+            "fk",
+            &["customer_id"],
+            "customers",
+            &["id"],
+            ReferentialAction::Cascade,
+            ReferentialAction::NoAction,
+        );
+        let s = c.to_string();
+        assert!(s.contains("REFERENCES"));
+        assert!(s.contains("customer_id"));
+        assert!(s.contains("customers(id)"));
+    }
+
+    #[test]
+    fn no_action_is_left_off_the_rendered_definition() {
+        let c = fk(
+            "fk",
+            &["id"],
+            "t",
+            &["id"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        );
+        let s = c.to_string();
+        assert!(!s.contains("ON DELETE"));
+        assert!(!s.contains("ON UPDATE"));
+    }
+
+    #[test]
+    fn a_connector_that_cannot_read_foreign_keys_reports_them_unread_not_absent() {
+        let source = TableCatalog::new(one_column()).with_unread(vec![ConstraintKind::ForeignKey]);
+        let target = TableCatalog::new(one_column()).with_constraints(vec![fk(
+            "fk",
+            &["id"],
+            "t",
+            &["id"],
+            ReferentialAction::NoAction,
+            ReferentialAction::NoAction,
+        )]);
+        let changes = compare(&source, &target);
+        assert!(changes.is_empty());
+        assert!(source.unread.contains(&ConstraintKind::ForeignKey));
     }
 }

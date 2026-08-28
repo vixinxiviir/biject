@@ -1,5 +1,7 @@
 use super::ConnectorError;
-use crate::catalog::{CatalogAvailability, ColumnDef, Constraint, IndexDef, TableCatalog};
+use crate::catalog::{
+    CatalogAvailability, ColumnDef, Constraint, IndexDef, ReferentialAction, TableCatalog,
+};
 use polars::prelude::*;
 use tokio_postgres::{types::Type, NoTls};
 
@@ -352,9 +354,7 @@ async fn load_catalog(
 
     // `contype` is Postgres' internal "char" type, which tokio-postgres will
     // not hand back as a String. Cast it in the query rather than decoding a
-    // single byte here.
-    //
-    // Foreign keys ('f') are deliberately absent: see `catalog::Constraint`.
+    // single byte here. The same holds for `confdeltype` and `confupdtype`.
     const CONSTRAINT_QUERY: &str = "
         SELECT con.conname,
                con.contype::text,
@@ -365,13 +365,25 @@ async fn load_catalog(
                  JOIN pg_attribute a
                    ON a.attrelid = con.conrelid AND a.attnum = k.attnum
                  ORDER BY k.ord
-               ) AS columns
+               ) AS columns,
+               CASE WHEN con.contype = 'f' THEN n2.nspname || '.' || c2.relname ELSE NULL END AS referenced_table,
+               CASE WHEN con.contype = 'f' THEN ARRAY(
+                 SELECT a2.attname
+                 FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a2
+                   ON a2.attrelid = con.confrelid AND a2.attnum = k.attnum
+                 ORDER BY k.ord
+               ) ELSE NULL END AS referenced_columns,
+               con.confdeltype::text,
+               con.confupdtype::text
         FROM pg_constraint con
         JOIN pg_class c     ON c.oid = con.conrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_class c2 ON c2.oid = con.confrelid
+        LEFT JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
         WHERE n.nspname = $1
           AND c.relname = $2
-          AND con.contype IN ('p', 'u', 'c')
+          AND con.contype IN ('p', 'u', 'c', 'f')
         ORDER BY con.conname";
 
     let constraint_rows = client
@@ -385,6 +397,10 @@ async fn load_catalog(
         let kind: String = row.get(1);
         let expression: Option<String> = row.get(2);
         let columns: Vec<String> = row.get(3);
+        let referenced_table: Option<String> = row.get(4);
+        let referenced_columns: Option<Vec<String>> = row.get(5);
+        let on_delete_char: Option<String> = row.get(6);
+        let on_update_char: Option<String> = row.get(7);
 
         constraints.push(match kind.as_str() {
             "p" => Constraint::PrimaryKey { name, columns },
@@ -399,8 +415,36 @@ async fn load_catalog(
                     None => continue,
                 },
             },
-            // The query filters to the three above; anything else is a schema
-            // change in Postgres itself rather than in the user's table.
+            "f" => {
+                // Postgres populates all four of these for every 'f' row. If
+                // one is null the query is wrong, and a foreign key with an
+                // empty target or an assumed NO ACTION would be a statement
+                // about what happens to real rows on a real delete. Fail
+                // loudly; the caller turns this into a `Failed` availability
+                // that names the reason.
+                let (Some(referenced_table), Some(referenced_columns)) =
+                    (referenced_table, referenced_columns)
+                else {
+                    return Err(ConnectorError::QueryFailed(format!(
+                        "foreign key `{name}` on {schema}.{table} reports no referenced table"
+                    )));
+                };
+                let (Some(on_delete), Some(on_update)) = (on_delete_char, on_update_char) else {
+                    return Err(ConnectorError::QueryFailed(format!(
+                        "foreign key `{name}` on {schema}.{table} reports no referential actions"
+                    )));
+                };
+                Constraint::ForeignKey {
+                    name,
+                    columns,
+                    referenced_table,
+                    referenced_columns,
+                    on_delete: referential_action(&on_delete),
+                    on_update: referential_action(&on_update),
+                }
+            }
+            // Anything else is a schema change in Postgres itself rather than in
+            // the user's table.
             _ => continue,
         });
     }
@@ -455,6 +499,22 @@ async fn load_catalog(
             .with_constraints(constraints)
             .with_indexes(indexes),
     ))
+}
+
+/// One of `pg_constraint.confdeltype` / `confupdtype`, as a modelled action.
+///
+/// An unrecognised code is kept verbatim rather than folded into `NoAction`.
+/// Postgres has added referential actions before and will again, and a new one
+/// silently reported as "nothing happens" is a claim about somebody's data.
+fn referential_action(code: &str) -> ReferentialAction {
+    match code {
+        "a" => ReferentialAction::NoAction,
+        "r" => ReferentialAction::Restrict,
+        "c" => ReferentialAction::Cascade,
+        "n" => ReferentialAction::SetNull,
+        "d" => ReferentialAction::SetDefault,
+        other => ReferentialAction::Other(other.to_string()),
+    }
 }
 
 /// Split a bare table reference into schema and table.

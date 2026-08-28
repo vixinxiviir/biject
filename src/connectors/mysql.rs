@@ -411,7 +411,9 @@ async fn load_catalog(
         WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ?
         ORDER BY cc.CONSTRAINT_NAME";
 
-    let mut unread = Vec::new();
+    // Foreign keys are modelled but not yet read here. Declared unread rather
+    // than left out, so an empty list does not read as "this table has none".
+    let mut unread = vec![ConstraintKind::ForeignKey];
     match conn
         .exec::<(String, String), _, _>(CHECK_QUERY, (schema, table))
         .await

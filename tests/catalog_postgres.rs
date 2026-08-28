@@ -89,6 +89,13 @@ fn create_fixtures(dsn: &str) {
         DROP TABLE IF EXISTS empties;
         DROP TABLE IF EXISTS constrained;
         DROP TABLE IF EXISTS unconstrained;
+        -- Children before parents. A foreign key makes DROP TABLE ordered, so
+        -- dropping `customers` first fails once `orders` exists — which is to
+        -- say, on every run after the first.
+        DROP TABLE IF EXISTS orders;
+        DROP TABLE IF EXISTS customers;
+        DROP TABLE IF EXISTS composite_child;
+        DROP TABLE IF EXISTS composite_parent;
         DROP SCHEMA IF EXISTS reporting CASCADE;
 
         CREATE TABLE dev (
@@ -127,6 +134,25 @@ fn create_fixtures(dsn: &str) {
           email VARCHAR(50) NOT NULL,
           region TEXT,
           amount NUMERIC(12,2)
+        );
+
+        CREATE TABLE customers (
+          id BIGINT PRIMARY KEY,
+          name TEXT
+        );
+        CREATE TABLE orders (
+          id BIGINT PRIMARY KEY,
+          customer_id BIGINT REFERENCES customers(id) ON DELETE CASCADE ON UPDATE RESTRICT
+        );
+        CREATE TABLE composite_parent (
+          a INT,
+          b INT,
+          PRIMARY KEY (a, b)
+        );
+        CREATE TABLE composite_child (
+          a INT,
+          b INT,
+          FOREIGN KEY (a, b) REFERENCES composite_parent(a, b)
         );
 
         CREATE SCHEMA reporting;
@@ -538,4 +564,97 @@ fn a_schema_only_load_matches_a_full_load_on_a_real_server() {
     );
     assert_eq!(full.dtypes(), schema.dtypes(), "dtypes must match");
     assert_eq!(schema.height(), 0, "schema-only load must be empty");
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL"]
+fn a_foreign_key_is_read_with_the_table_and_columns_it_points_at() {
+    let dsn = dsn();
+    setup(&dsn);
+    let CatalogAvailability::Available(catalog) = runtime().block_on(read(&dsn, "orders")) else {
+        panic!("expected catalog");
+    };
+    let fk = catalog
+        .constraints
+        .iter()
+        .find(|c| matches!(c, biject::catalog::Constraint::ForeignKey { .. }))
+        .expect("foreign key");
+    assert_eq!(fk.columns(), &["customer_id"]);
+    // PostgreSQL reports schema-qualified name
+    assert!(fk.to_string().contains("customers"));
+    assert!(fk.to_string().contains("REFERENCES"));
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL"]
+fn a_composite_foreign_key_keeps_both_sides_in_key_order() {
+    let dsn = dsn();
+    setup(&dsn);
+    let CatalogAvailability::Available(catalog) = runtime().block_on(read(&dsn, "composite_child"))
+    else {
+        panic!("expected catalog");
+    };
+    let fk = catalog
+        .constraints
+        .iter()
+        .find(|c| matches!(c, biject::catalog::Constraint::ForeignKey { .. }))
+        .expect("foreign key");
+    assert_eq!(fk.columns(), &["a", "b"]);
+    // The referenced columns should be in the same order as local columns
+    let s = fk.to_string();
+    assert!(s.contains("composite_parent(a, b)"), "{s}");
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL"]
+fn the_declared_referential_actions_are_read_rather_than_assumed() {
+    let dsn = dsn();
+    setup(&dsn);
+    let CatalogAvailability::Available(catalog) = runtime().block_on(read(&dsn, "orders")) else {
+        panic!("expected catalog");
+    };
+    let fk = catalog
+        .constraints
+        .iter()
+        .find(|c| matches!(c, biject::catalog::Constraint::ForeignKey { .. }))
+        .expect("foreign key");
+    let s = fk.to_string();
+    assert!(s.contains("ON DELETE CASCADE"), "{s}");
+    assert!(s.contains("ON UPDATE RESTRICT"), "{s}");
+
+    // composite_child has no explicit actions, so both should be NoAction and omitted
+    let CatalogAvailability::Available(catalog2) =
+        runtime().block_on(read(&dsn, "composite_child"))
+    else {
+        panic!("expected catalog");
+    };
+    let fk2 = catalog2
+        .constraints
+        .iter()
+        .find(|c| matches!(c, biject::catalog::Constraint::ForeignKey { .. }))
+        .expect("foreign key");
+    let s2 = fk2.to_string();
+    assert!(!s2.contains("ON DELETE"), "{s2}");
+    assert!(!s2.contains("ON UPDATE"), "{s2}");
+}
+
+#[test]
+#[ignore = "needs a live PostgreSQL"]
+fn a_foreign_key_does_not_appear_as_an_index() {
+    let dsn = dsn();
+    setup(&dsn);
+    let CatalogAvailability::Available(catalog) = runtime().block_on(read(&dsn, "orders")) else {
+        panic!("expected catalog");
+    };
+    let fk_count = catalog
+        .constraints
+        .iter()
+        .filter(|c| matches!(c, biject::catalog::Constraint::ForeignKey { .. }))
+        .count();
+    assert_eq!(fk_count, 1);
+    // Foreign keys are constraints, not indexes
+    assert!(catalog
+        .indexes
+        .iter()
+        .all(|idx| !idx.name.contains("customer_id")));
 }

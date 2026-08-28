@@ -374,7 +374,11 @@ fn load_catalog(
         TableCatalog::new(columns)
             .with_constraints(constraints)
             .with_indexes(indexes)
-            .with_unread(vec![ConstraintKind::Check]),
+            // Check bodies live only in the original CREATE TABLE text, which
+            // this does not parse. Foreign keys are modelled but not yet read
+            // here. Both are declared rather than left out, so an empty list
+            // does not read as "this table has none".
+            .with_unread(vec![ConstraintKind::Check, ConstraintKind::ForeignKey]),
     ))
 }
 
