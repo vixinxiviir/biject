@@ -25,7 +25,10 @@ Layout of the repository you are working in:
 - `src/schema.rs` — the `schema` command: runs a comparison and renders it as
   text, JSON or CSV.
 - `src/connectors/` — one module per engine. **Do not modify these** unless the
-  spec explicitly says to.
+  spec explicitly says to. When a spec does, its acceptance section names exactly
+  which ones and what each should show in `git diff --stat`.
+- `src/sqltype.rs` and `src/sqldialect.rs` — canonical SQL type names, and how
+  each engine spells a type and quotes an identifier.
 - `src/data.rs` — row-level diffing. Unrelated to most specs.
 - `src/cli.rs` — argument definitions.
 - `tests/` — integration tests that need live database servers. They are
@@ -87,6 +90,13 @@ Do not report success on work you have not run. Before you say you are done:
 
 If a step fails, fix it and run it again. Paste the real output. Do not
 paraphrase results, and do not describe what you expect a command to print.
+
+**Check your summary against your diff before you send it.** A report once said
+a spec was complete when the file at the centre of it had not been touched and
+none of its tests existed — written from what the work was meant to be rather
+than from what the work was. `git diff --stat` next to the spec's expected file
+list catches that in one command, and it is the last thing to do before writing
+anything up.
 
 If an existing test fails because of your change, the default assumption is that
 your implementation is wrong, not that the test is wrong. Existing tests encode
