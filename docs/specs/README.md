@@ -143,12 +143,25 @@ knowledge about databases rather than migration generation:
 - The upside: that fabricated demo was the thread that led to the keyword bug,
   which had silently disabled catalog reading for any table whose name begins
   with `select` or `with` on every engine since 0.5.
-- **Tests that assert on a fixture instead of on the code.** Three specs in a
-  row now. 0.9b wrote the grouping twice; 0.9c built a `Scope` by hand and then
-  asserted the literal it had just written was non-empty, and restated
-  `load_policy`'s validation inside the test that was meant to check it. Every
-  one of them would pass with the shipped path broken. **A spec that lists tests
-  must say which function each one calls**, not only what it asserts.
+- **Tests that assert on a fixture instead of on the code.** 0.9b wrote the
+  grouping twice; 0.9c built a `Scope` by hand and then asserted the literal it
+  had just written was non-empty, and restated `load_policy`'s validation inside
+  the test that was meant to check it. Every one of them would pass with the
+  shipped path broken. **A spec that lists tests must say which function each one
+  calls**, not only what it asserts.
+
+  Two implementers, not one: 0.9c was started by a different local model and
+  finished by the usual one, so this is a shape that more than one model falls
+  into rather than a habit of any particular one. That is why the rule went into
+  the standing brief rather than into a spec.
+- **A spec split across two implementers has no owner.** 0.9c was begun by one
+  model and finished by another, and the second reasonably treated the code
+  already in the tree as settled rather than as a draft to review. Most of what
+  needed fixing came from the first pass and survived because nobody's job was to
+  question it. Its report said as much — "already present" — which read as odd at
+  the time and was in fact accurate. **If a spec changes hands, tell the second
+  implementer that the existing diff is unreviewed and in scope**, or the handoff
+  quietly launders it.
 - **`Option` on a field that must always be present.** 0.9c made the scope
   optional so that hand-built test fixtures would compile. That let a result
   exist that said nothing about its own coverage, which is the exact thing the
