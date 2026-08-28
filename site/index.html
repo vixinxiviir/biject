@@ -240,8 +240,8 @@ Compatibility:
 <section>
   <h2>Generate the migration, and its rollback</h2>
   <p class="muted">
-    Free tells you what differs. <span class="mono">migrate</span> writes the PostgreSQL
-    DDL that closes the gap — and a rollback derived from the same plan, so the two cannot drift apart.
+    Free tells you what differs. <span class="mono">migrate</span> writes the
+    DDL that closes the gap — for PostgreSQL, MySQL or SQL Server — and a rollback derived from the same plan, so the two cannot drift apart.
   </p>
 <pre><span class="p">$</span> biject migrate --source dev --target prod \
       --table accounts --out up.sql --rollback down.sql
@@ -285,17 +285,39 @@ ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;
 </section>
 
 <section>
-  <h2>What it is not</h2>
+  <h2>Where it goes next</h2>
+  <p class="muted">
+    Bijection compares tables it can load, which today means tables that fit comfortably
+    in memory — not billion-row fact tables in a warehouse. Pushing the comparison into
+    the database is the largest item below, and everything about warehouse support waits
+    on it. Where it cannot read something — a CSV has no catalog, SQLite hides its check
+    constraints — the report names the gap rather than returning a clean result, so you
+    are never guessing what a green tick covered.
+  </p>
   <div class="honest">
-    <h3>Worth knowing before you install</h3>
+    <h3>Near term</h3>
     <ul>
-      <li><strong>Not built for warehouse-scale tables.</strong> Comparison loads data locally rather than pushing checksums to the server, so it suits tables that fit comfortably in memory — not billion-row fact tables in Snowflake or BigQuery.</li>
-      <li><strong>No cloud warehouse connectors.</strong> PostgreSQL, MySQL, SQL Server, SQLite and CSV today.</li>
-      <li><strong><span class="mono">migrate</span> generates PostgreSQL only</strong>, and refuses to write DDL for any other target rather than emitting something that will not run.</li>
-      <li><strong>It never applies anything.</strong> There is no <span class="mono">--apply</span> flag and there will not be one.</li>
-      <li><strong>Migrations cover columns, not tables or indexes.</strong> Column additions, removals, type changes and renames — not <span class="mono">CREATE TABLE</span> or index DDL.</li>
+      <li><strong>Foreign keys everywhere.</strong> PostgreSQL reads them today; MySQL, SQL Server and SQLite say plainly that they do not yet, rather than reporting an empty list.</li>
+      <li><strong>A report that names what it never examines</strong>, so a clean result tells you how much it covered.</li>
+      <li><strong>Release binaries for macOS and Windows</strong> alongside Linux.</li>
+      <li><strong>The desktop app brought level with the CLI</strong>, or a plain statement of what it does not cover.</li>
+      <li><strong>A documented, stable public API</strong> for 1.0.</li>
     </ul>
   </div>
+  <div class="honest" style="margin-top:14px">
+    <h3>Later</h3>
+    <ul>
+      <li><strong>Checksum and sampling comparison</strong> for warehouse-scale tables — the gate on everything else here.</li>
+      <li><strong>Cloud warehouse connectors</strong> — Snowflake, Databricks, BigQuery.</li>
+      <li><strong>Cross-engine schema diff</strong> and type mapping.</li>
+    </ul>
+  </div>
+  <p class="muted" style="font-size:14.5px">
+    Not planned, ever: a hosted or scheduled component, a subscription, an account, or any
+    mode that executes generated DDL against a live database. There is no
+    <span class="mono">--apply</span> flag and there will not be one — Bijection writes a
+    file for you to read.
+  </p>
 </section>
 
 <footer>

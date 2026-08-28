@@ -417,7 +417,7 @@ Not every engine exposes every kind. SQLite keeps `CHECK` bodies only in the ori
 Each server re-renders a `CHECK` body into its own spelling — `(amount > (0)::numeric)` on PostgreSQL, ``(`amount` > 0)`` on MySQL, `([amount]>(0))` on SQL Server. They compare reliably within one engine, not across two. `CREATE UNIQUE INDEX` is likewise a unique *constraint* on MySQL and an *index* on PostgreSQL and SQL Server; each reading is faithful to its own server.
 
 **Foreign keys are not reported**  
-Deliberately. They reference another table, and every comparison here works on one table at a time.
+PostgreSQL reads them. MySQL, SQL Server and SQLite do not yet, and say so in the report rather than leaving an empty list that would read as "this table has none". The referenced table is recorded as a name only — nothing connects to it or checks that it exists, because every comparison here works on one table at a time.
 
 **Type classification seems wrong**  
 Polars infers schema from the first 100 rows. If a CSV column contains mixed types, normalize the input first so the sampled rows reflect the full dataset.
@@ -446,15 +446,17 @@ The project name is covered by the [NOTICE](NOTICE) file, not by the GPL.
 
 Near term:
 
-- [ ] Test coverage for the data diff path
-- [ ] Migration and rollback DDL generation for PostgreSQL (paid)
+- [ ] Foreign keys in schema comparison for every engine — PostgreSQL reads them today
+- [ ] A report that names what it never examines, so a clean result says how much it covered
+- [ ] Release binaries for macOS and Windows alongside Linux
+- [ ] Desktop app level with the CLI, or a plain statement of what it does not cover
+- [ ] A documented, stable public API for 1.0
 
 Later:
 
-- [ ] Checksum and sampling comparison for warehouse-scale tables
+- [ ] Checksum and sampling comparison for warehouse-scale tables — the gate on everything below
 - [ ] Cloud warehouse connectors (Snowflake, Databricks, BigQuery)
 - [ ] Cross-engine schema diff and type mapping
-- [ ] Additional SQL dialects for migration generation
 
 Explicitly not planned: hosted or scheduled components, subscriptions, accounts,
 and any mode that executes generated DDL against a live database.
