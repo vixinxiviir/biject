@@ -10,20 +10,65 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ## [Unreleased]
 
+---
+
+## [0.9.0] — 2026-08-29
+
+### Added
+
+- **Foreign keys are read and compared**, on PostgreSQL, MySQL, SQL Server and
+  SQLite, with the columns they cover, the table and columns they point at, and
+  their `ON DELETE` / `ON UPDATE` actions. Until now two tables differing only in
+  a dropped foreign key compared as identical, which was the largest remaining
+  case of a confident report that had quietly skipped something.
+
+  A referential action the engine reports and this does not recognise is kept
+  verbatim rather than folded into `NO ACTION` — that would be a claim about what
+  a real delete does to real rows.
+
+  Foreign keys are **reported, never generated**. `migrate` refuses one and says
+  why: writing it means ordering the work against another table, which is a
+  different program from this one.
+- **Every comparison now says what it never examines** — triggers, views,
+  generated-column expressions, identity and sequence settings, collations,
+  comments, partitioning, storage parameters, grants, and anything in a table
+  other than the one named. Printed on every run, including a clean one, because
+  "no differences found" and "no differences among the things I looked at" are
+  different statements and nothing else in the output told them apart. The JSON
+  result gains a `scope` object carrying both halves.
+- **`foreign_key`** joins `primary_key`, `unique`, `check` and `index` as a kind
+  a policy's `require_constraints` may name.
+- **`biject --help` describes its commands.** `schema`, `data` and `batch`
+  previously appeared with no text beside them, as did several of their options.
+
+### Changed
+
+- **The public API is frozen for 1.0.** The types that will grow are
+  `#[non_exhaustive]`: `Constraint`, `ConstraintKind`, `ReferentialAction`,
+  `MetadataChange`, `CatalogAvailability`, `TypeImpact`, `ColumnDef`, `IndexDef`,
+  `CanonicalType`, `Dialect`, `UnsupportedType`, `SchemaDiffError`,
+  `ConnectorError`, `ExportFormat`, `FailOn` and `ManifestFormat`. Adding a
+  variant or a field is no longer a breaking change, so the next release will not
+  need a major version to report something new.
+
+  **Breaking for embedders:** code outside the crate can no longer match those
+  types exhaustively or build `ColumnDef` and `IndexDef` with a struct literal.
+  Add a wildcard arm — and treat it as "something arrived that this version does
+  not understand", not as a case to drop silently — and use `ColumnDef::new` and
+  `IndexDef::new`, which take every field and default none.
+- **Every public item is documented**, and `#![deny(missing_docs)]` keeps it that
+  way.
+
 ### Fixed
 
-- **The same type spelled two ways is no longer a breaking change.**
-  `VARCHAR(50)` and `CHARACTER VARYING(50)` are one type, as are `INT` and
-  `INTEGER`, and `DECIMAL` and `NUMERIC`. PostgreSQL's catalog always reports
-  the long spelling, so comparing a PostgreSQL table against one on any other
-  engine reported a false breaking change on every string column and returned
-  `backward compatible: false` for a schema nobody had touched. A declared type
-  is now reduced to a canonical form before comparison, and the report still
-  shows the original text when something genuinely changed.
-
-  Only spellings are folded. `varchar` and `text` remain different, as do
-  MySQL's `DATETIME` and PostgreSQL's `TIMESTAMP` — those are judgements about
-  what an engine means rather than how it spells, and are still out of scope.
+- **A table whose name begins with `select` or `with` was read as a SQL
+  statement.** `withholding`, `withdrawals`, `with_tax`, `selections` — the
+  connector decided "table name or query?" on a bare prefix match, concluded the
+  name was a `WITH` clause, read no catalog for it, and reported "the query is a
+  SELECT rather than a table reference" about a table that was right there. Every
+  catalog feature — declared types, nullability, defaults, constraints, indexes —
+  was silently off for those tables on every engine since 0.5. A keyword now has
+  to be a whole word.
 
 ---
 
