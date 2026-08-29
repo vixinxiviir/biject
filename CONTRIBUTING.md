@@ -26,10 +26,9 @@ cargo clippy --all-targets
 CI runs the tests and clippy on every push and pull request, and a failure
 blocks releases.
 
-Run `cargo fmt` over the code you touched. Do not reformat the whole tree —
-it is not uniformly formatted yet, so `cargo fmt --check` reports pre-existing
-differences that have nothing to do with your change, and a wholesale reformat
-would bury it in noise.
+The tree is rustfmt-formatted and CI checks it, so `cargo fmt` before you push.
+If it touches a file you did not edit, stop and say so rather than committing
+the churn — a feature buried under a whole-repository reformat is unreviewable.
 
 Three clippy lints are currently allowed in CI (`too_many_arguments`,
 `needless_range_loop`, `match_ref_pats`) because they already fire across
@@ -41,8 +40,45 @@ The desktop app builds separately:
 cargo build --manifest-path tauri-app/src-tauri/Cargo.toml
 ```
 
-Tests use fixtures and do not require a live database. If your change touches
-comparison logic, it needs a test — see `examples/` for sample data.
+Most tests use fixtures and need no server. If your change touches comparison
+logic, it needs a test — see `examples/` for sample data.
+
+### Testing against real databases
+
+The tests that read catalog metadata are `#[ignore]`d and need a live server,
+because that is the only thing that proves a hand-written query against a system
+catalog returns what it claims to. **Every connector defect this project has
+found was invisible to a passing offline suite.** If you touch
+`src/connectors/`, run these.
+
+```bash
+docker run -d --name biject-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=bijecttest -p 55432:5432 postgres:16
+```
+
+```bash
+docker run -d --name biject-mysql -e MYSQL_ROOT_PASSWORD=test -e MYSQL_DATABASE=bijecttest -p 33306:3306 mysql:8
+```
+
+SQL Server has no equivalent of `POSTGRES_DB`, so the database is created after
+the server comes up:
+
+```bash
+docker run -d --name biject-mssql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Str0ng!Passw0rd' -p 11433:1433 mcr.microsoft.com/mssql/server:2022-latest
+```
+
+```bash
+docker exec biject-mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Str0ng!Passw0rd' -C -Q "IF DB_ID('bijecttest') IS NULL CREATE DATABASE bijecttest"
+```
+
+Then:
+
+```bash
+BIJECT_TEST_PG='postgres://postgres:test@localhost:55432/bijecttest' BIJECT_TEST_MYSQL='mysql://root:test@localhost:33306/bijecttest' BIJECT_TEST_MSSQL='sqlserver://sa:Str0ng!Passw0rd@localhost:11433/bijecttest' cargo test --all-targets -- --ignored
+```
+
+**Run that twice.** The fixtures drop and recreate their tables, and a foreign
+key makes `DROP TABLE` ordered — a teardown in the wrong order passes on a fresh
+database and fails on every run after. That has happened twice.
 
 ## Pull requests
 
