@@ -23,6 +23,7 @@ use serde::Serialize;
 
 /// One column, as the database declares it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct ColumnDef {
     /// Column name as reported by the catalog. Engine-generated, so do not compare across engines.
     pub name: String,
@@ -38,6 +39,35 @@ pub struct ColumnDef {
     pub ordinal: u32,
 }
 
+impl ColumnDef {
+    /// A column, from every field it has.
+    ///
+    /// The only way to build one outside this crate: the struct is
+    /// `#[non_exhaustive]` because a column will grow a collation and a
+    /// generated-column expression before 1.0, and a struct literal in
+    /// somebody's code would stop compiling when it does.
+    ///
+    /// Every field is positional and none is defaulted. A builder whose unset
+    /// `nullable` quietly meant `true` would be a plausible default standing in
+    /// for a value nobody supplied, which is the one thing this codebase does
+    /// not do. Five arguments is the price of that, deliberately.
+    pub fn new(
+        name: String,
+        data_type: String,
+        nullable: bool,
+        default: Option<String>,
+        ordinal: u32,
+    ) -> Self {
+        Self {
+            name,
+            data_type,
+            nullable,
+            default,
+            ordinal,
+        }
+    }
+}
+
 /// A rule the table enforces about its own rows.
 ///
 /// Deliberately table-local: every kind here mentions only this table's own
@@ -46,6 +76,7 @@ pub struct ColumnDef {
 /// Generating DDL for one means ordering work across tables, which is a
 /// different program from this one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Constraint {
     /// Primary key constraint enforcing uniqueness and non-null.
@@ -110,6 +141,7 @@ pub enum Constraint {
 /// — and a migration generated from it would confidently drop a rule it had
 /// simply never seen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
     /// Primary key constraint.
@@ -151,6 +183,7 @@ impl fmt::Display for ConstraintKind {
 /// What the database does to the referencing rows when the referenced row is
 /// deleted or its key updated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum ReferentialAction {
     /// No action taken.
@@ -294,6 +327,7 @@ impl fmt::Display for Constraint {
 /// out by the connectors that read them. The constraint already reports them,
 /// and listing both would double-count every key in the table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct IndexDef {
     /// Name assigned by the engine; do not compare across engines.
     pub name: String,
@@ -304,6 +338,19 @@ pub struct IndexDef {
 }
 
 impl IndexDef {
+    /// An index, from every field it has.
+    ///
+    /// The only way to build one outside this crate, for the same reason as
+    /// [`ColumnDef::new`]: an index will grow a partial predicate and a method
+    /// before 1.0.
+    pub fn new(name: String, columns: Vec<String>, unique: bool) -> Self {
+        Self {
+            name,
+            columns,
+            unique,
+        }
+    }
+
     /// Two indexes are the same index when they cover the same columns in the
     /// same order with the same uniqueness. Names are generated, so they are
     /// no more comparable here than they are for constraints.
@@ -328,8 +375,10 @@ impl fmt::Display for IndexDef {
 ///
 /// ```rust
 /// use biject::catalog::{ColumnDef, TableCatalog};
-/// let catalog = TableCatalog::new(vec![ColumnDef { name: "id".into(), data_type: "integer".into(), nullable: false, default: None, ordinal: 1 }])
-///     .with_unread(vec![]);
+///
+/// let id = ColumnDef::new("id".into(), "integer".into(), false, None, 1);
+/// let catalog = TableCatalog::new(vec![id]).with_unread(vec![]);
+///
 /// assert_eq!(catalog.columns.len(), 1);
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -409,6 +458,7 @@ impl TableCatalog {
 /// reaches the user. "No nullability changes" and "nullability was never
 /// examined" are different statements and must not look alike.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum CatalogAvailability {
     /// The catalog was read.
@@ -504,6 +554,7 @@ impl CatalogAvailability {
 /// per-dialect equivalence matrix and deliberately out of scope; those stay
 /// `Unknown` and are treated as breaking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum TypeImpact {
     /// Same type, more capacity. `varchar(50)` to `varchar(200)`. Safe.
@@ -546,6 +597,7 @@ pub fn classify_type_change(from: &str, to: &str) -> TypeImpact {
 
 /// A change to a column that only the catalog can reveal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MetadataChange {
     /// The declared type changed in a way Polars cannot see, such as
@@ -1582,5 +1634,29 @@ mod tests {
         let changes = compare(&source, &target);
         assert!(changes.is_empty());
         assert!(source.unread.contains(&ConstraintKind::ForeignKey));
+    }
+
+    #[test]
+    fn a_column_definition_can_be_built_through_its_constructor() {
+        let via_new = ColumnDef::new("id".into(), "integer".into(), false, None, 1);
+        let via_literal = ColumnDef {
+            name: "id".into(),
+            data_type: "integer".into(),
+            nullable: false,
+            default: None,
+            ordinal: 1,
+        };
+        assert_eq!(via_new, via_literal);
+    }
+
+    #[test]
+    fn an_index_definition_can_be_built_through_its_constructor() {
+        let via_new = IndexDef::new("idx".into(), vec!["id".into()], false);
+        let via_literal = IndexDef {
+            name: "idx".into(),
+            columns: vec!["id".into()],
+            unique: false,
+        };
+        assert_eq!(via_new, via_literal);
     }
 }

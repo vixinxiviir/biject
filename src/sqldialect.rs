@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 /// SQL dialect supported by the tool.
 pub enum Dialect {
@@ -23,6 +24,7 @@ pub enum Dialect {
 
 /// Why a canonical type cannot be written for a dialect.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UnsupportedType {
     /// Dialect for which the type is unsupported.
     pub dialect: Dialect,

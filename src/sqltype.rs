@@ -9,6 +9,7 @@ pub const UNBOUNDED: u64 = u64::MAX;
 
 /// A declared type reduced to a comparable form.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CanonicalType {
     /// The canonical base name, lowercase. For a spelling in the alias table
     /// this is the canonical member; otherwise it is the cleaned input.

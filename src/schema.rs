@@ -62,6 +62,7 @@ pub enum TypeChangeImpact {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 /// Errors that can arise during schema comparison.
 pub enum SchemaDiffError {
     /// The type for a column could not be determined.

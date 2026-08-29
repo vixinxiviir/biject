@@ -120,6 +120,7 @@ impl SourceConfig {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 /// Errors that can occur while loading data or catalogs.
 pub enum ConnectorError {
     /// Failed to connect to the source.

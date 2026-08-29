@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 const COMPOSITE_KEY_SEP: &str = "::";
 
 #[derive(Clone, Debug, ValueEnum)]
+#[non_exhaustive]
 /// Format for exporting comparison results.
 pub enum ExportFormat {
     /// CSV file.
@@ -28,6 +29,7 @@ pub enum ExportFormat {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
+#[non_exhaustive]
 #[value(rename_all = "kebab-case")]
 /// When the tool should exit with a non-zero status.
 pub enum FailOn {
@@ -38,6 +40,7 @@ pub enum FailOn {
 }
 
 #[derive(Clone, Debug, ValueEnum)]
+#[non_exhaustive]
 /// Format for batch manifests.
 pub enum ManifestFormat {
     /// JSON manifest.
