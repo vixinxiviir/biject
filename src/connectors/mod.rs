@@ -1,10 +1,16 @@
 //! Connectors for reading data and catalogs from files and databases.
 
+/// Reading a CSV file into a DataFrame.
 pub mod csv;
+/// MySQL and MariaDB: rows, catalog metadata and schema-only loads.
 pub mod mysql;
+/// PostgreSQL: rows, catalog metadata and schema-only loads.
 pub mod postgres;
+/// Saved connection details, with passwords held in the OS keychain.
 pub mod profiles;
+/// SQLite: rows, pragma-derived catalog metadata and schema-only loads.
 pub mod sqlite;
+/// Microsoft SQL Server: rows, catalog metadata and schema-only loads.
 pub mod sqlserver;
 
 use polars::prelude::DataFrame;
@@ -15,41 +21,59 @@ use std::fmt;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceConfig {
+    /// A local file. CSV today; identified by path rather than by scheme.
     File {
+        /// Path to the file.
         path: String,
     },
+    /// Microsoft SQL Server.
     SqlServer {
+        /// Hostname or address.
         host: String,
         /// Defaults to 1433 when omitted.
         port: Option<u16>,
+        /// Database to connect to.
         database: String,
+        /// User to authenticate as.
         username: String,
+        /// Password for `username`.
         password: String,
         /// Either a bare table reference ("dbo.customers") or a full SELECT query.
         query: String,
     },
+    /// PostgreSQL.
     Postgres {
+        /// Hostname or address.
         host: String,
         /// Defaults to 5432 when omitted.
         port: Option<u16>,
+        /// Database to connect to.
         database: String,
+        /// User to authenticate as.
         username: String,
+        /// Password for `username`.
         password: String,
         /// Either a bare table/schema reference ("public.customers") or a full SELECT query.
         query: String,
     },
+    /// SQLite, as a file on disk.
     Sqlite {
         /// Path to the .db / .sqlite file.
         path: String,
         /// Either a bare table name ("customers") or a full SELECT query.
         query: String,
     },
+    /// MySQL or MariaDB.
     Mysql {
+        /// Hostname or address.
         host: String,
         /// Defaults to 3306 when omitted.
         port: Option<u16>,
+        /// Database to connect to. On MySQL this is also the schema.
         database: String,
+        /// User to authenticate as.
         username: String,
+        /// Password for `username`.
         password: String,
         /// Either a bare table/schema reference ("customers") or a full SELECT query.
         query: String,

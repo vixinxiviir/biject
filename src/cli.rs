@@ -15,13 +15,15 @@ use crate::schema;
 #[command(version)]
 #[command(about = "A CLI tool for diffing data and schemas")]
 #[command(arg_required_else_help = true)]
+/// The parsed command line.
 pub struct Cli {
+    /// The subcommand to run.
     #[command(subcommand)]
     pub command: Commands,
 }
 
+/// The free commands.
 #[derive(Subcommand)]
-/// Subcommands for the CLI.
 pub enum Commands {
     /// Compare the structure of two tables or files.
     Schema {
@@ -33,24 +35,31 @@ pub enum Commands {
         #[arg(short, long)]
         target: String,
 
+        /// Table or SQL query for the source, required when the source is a
+        /// database URI.
         #[arg(
             long,
             help = "Table or SQL query for the source (required when source is a database URI)"
         )]
         source_query: Option<String>,
 
+        /// Table or SQL query for the target, required when the target is a
+        /// database URI.
         #[arg(
             long,
             help = "Table or SQL query for the target (required when target is a database URI)"
         )]
         target_query: Option<String>,
 
+        /// Path to a JSON schema policy to evaluate the comparison against.
         #[arg(long, help = "Optional path to a JSON schema policy/contract file")]
         policy: Option<String>,
 
+        /// File to write the comparison to. Requires `--format`.
         #[arg(long, help = "File to write the comparison to; requires --format")]
         output: Option<String>,
 
+        /// Format for `--output`.
         #[arg(
             long,
             value_enum,
@@ -58,6 +67,8 @@ pub enum Commands {
         )]
         format: Option<data::ExportFormat>,
 
+        /// Exit non-zero when the comparison finds changes at or above this
+        /// severity.
         #[arg(
             long,
             value_enum,
@@ -75,12 +86,16 @@ pub enum Commands {
         #[arg(short, long)]
         target: String,
 
+        /// Table or SQL query for the source, required when the source is a
+        /// database URI.
         #[arg(
             long,
             help = "Table or SQL query for the source (required when source is a database URI)"
         )]
         source_query: Option<String>,
 
+        /// Table or SQL query for the target, required when the target is a
+        /// database URI.
         #[arg(
             long,
             help = "Table or SQL query for the target (required when target is a database URI)"
@@ -103,18 +118,23 @@ pub enum Commands {
         #[arg(long)]
         temp: bool,
 
+        /// Columns to leave out of the comparison, comma-separated.
         #[arg(long, help = "Columns to exclude from comparison (comma-separated)")]
         exclude_columns: Option<String>,
 
+        /// The only columns to compare, comma-separated.
         #[arg(long, help = "Only compare these columns (comma-separated)")]
         only_columns: Option<String>,
 
+        /// Largest absolute difference between two numbers that still counts
+        /// as equal.
         #[arg(
             long,
             help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)"
         )]
         numeric_tolerance: Option<f64>,
 
+        /// The same, as a percentage of the larger value.
         #[arg(
             long,
             conflicts_with = "numeric_tolerance",
@@ -122,9 +142,11 @@ pub enum Commands {
         )]
         numeric_tolerance_percent: Option<f64>,
 
+        /// Print only modified rows, without the summary tables.
         #[arg(long, help = "Show only modified rows, skip summary tables")]
         diffs_only: bool,
 
+        /// Print the result as JSON on stdout, and nothing else.
         #[arg(
             long,
             help = "Output results as JSON to stdout (suppresses all other output)"
@@ -133,12 +155,14 @@ pub enum Commands {
     },
     /// Run many data comparisons from a manifest.
     Batch {
+        /// Path to a manifest describing the source and target pairs to run.
         #[arg(
             long,
             help = "Path to a batch manifest describing source/target pairs (JSON or CSV)"
         )]
         manifest: String,
 
+        /// How to parse the manifest, when its extension does not say.
         #[arg(
             long,
             value_enum,
@@ -158,18 +182,23 @@ pub enum Commands {
         #[arg(long, value_enum)]
         format: Option<data::ExportFormat>,
 
+        /// Columns to leave out of the comparison, comma-separated.
         #[arg(long, help = "Columns to exclude from comparison (comma-separated)")]
         exclude_columns: Option<String>,
 
+        /// The only columns to compare, comma-separated.
         #[arg(long, help = "Only compare these columns (comma-separated)")]
         only_columns: Option<String>,
 
+        /// Largest absolute difference between two numbers that still counts
+        /// as equal.
         #[arg(
             long,
             help = "Maximum absolute difference between two numbers before they count as changed (e.g. 0.01 ignores sub-cent differences)"
         )]
         numeric_tolerance: Option<f64>,
 
+        /// The same, as a percentage of the larger value.
         #[arg(
             long,
             conflicts_with = "numeric_tolerance",
@@ -177,9 +206,11 @@ pub enum Commands {
         )]
         numeric_tolerance_percent: Option<f64>,
 
+        /// Print only the per-pair counts, without the verbose summaries.
         #[arg(long, help = "Show only per-pair diff counts, skip verbose summaries")]
         diffs_only: bool,
 
+        /// Stop at the first pair that fails rather than running the rest.
         #[arg(long, help = "Stop the batch as soon as one pair fails")]
         fail_fast: bool,
     },

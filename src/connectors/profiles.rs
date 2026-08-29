@@ -11,16 +11,23 @@ const PROFILES_FILE: &str = "profiles.json";
 /// Connection profile metadata (no password — stored in OS keychain).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionProfile {
+    /// The name this profile is saved and looked up under.
     pub name: String,
+    /// Which engine: `postgres`, `mysql`, `sqlserver` or `sqlite`.
     pub db_type: String,
+    /// Hostname or address.
     pub host: String,
+    /// Port, or `None` to use the engine's default.
     pub port: Option<u16>,
+    /// Database to connect to.
     pub database: String,
+    /// User to authenticate as. The password is not stored here — see the
+    /// module header.
     pub username: String,
 }
 
-#[derive(Debug)]
 /// Errors that can occur while managing connection profiles.
+#[derive(Debug)]
 pub enum ProfileError {
     /// I/O error.
     Io(std::io::Error),
