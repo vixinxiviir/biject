@@ -30,11 +30,14 @@ Order matters only where "depends on" says so.
 | [0.9c-name-what-is-not-compared](0.9c-name-what-is-not-compared.md) | Done — `bbddb97` | 0.9a, 0.9b |
 | [0.9d-document-the-api-database-half](0.9d-document-the-api-database-half.md) | Done — `faf4920`, finished in `460b9aa` | 0.9a, 0.9b |
 | [0.9e-document-the-api-command-half](0.9e-document-the-api-command-half.md) | Done — `a68da95`, finished in `460b9aa` | 0.9d |
-| [0.9f-freeze-the-public-api](0.9f-freeze-the-public-api.md) | Open | 0.9a, 0.9b, 0.9c |
+| [0.9f-freeze-the-public-api](0.9f-freeze-the-public-api.md) | Done — `939e3bf` | 0.9a, 0.9b, 0.9c |
 
 The dependency chain is real this time: 0.9a defines a type that 0.9b, 0.9c,
 0.9d and 0.9f all describe or extend. Handing out 0.9d before 0.9a means
 documenting `Constraint` twice.
+
+**The queue is empty.** What is left before 1.0 is not implementer work:
+cross-platform release binaries, the desktop app's scope, and publishing 0.9.0.
 
 **Hand out 0.9a first.** It is the smallest of the foreign key specs and it
 decides the model the other three consume. Review it properly before 0.9b goes
@@ -131,6 +134,23 @@ knowledge about databases rather than migration generation:
   above.
 
 ## Notes from the 0.9 round
+
+- **An acceptance list is a spec's real contract, and mine left a command out.**
+  0.9f's list had `cargo test`, clippy, fmt and `cargo doc` but not
+  `cargo test --doc`, so a doctest that stopped compiling under the new
+  `#[non_exhaustive]` went unreported. It was the attribute working correctly —
+  a doctest is an external consumer, so it failed exactly where a downstream
+  crate would — and nothing in the spec asked anyone to look.
+- **A spec's own wording can end up in the code.** 0.9f's constructors carried
+  "Five arguments is not elegant and is the right trade here; say so in a comment
+  so nobody improves it" as their doc comment: the instruction pasted where the
+  explanation belonged. Phrase a spec's rationale as something to *say*, not as
+  something to say *about saying*.
+- **The paid crate is not covered by anything the queue checks.** 0.9f broke it
+  in eight places, and 0.9a's foreign keys had left a latent one since: a
+  wildcard arm added carelessly would have emitted `ADD CONSTRAINT fk` with an
+  empty body. Rebuild `biject-pro` against the free crate at the end of any spec
+  that changes a public type — the free crate's own suite cannot see it.
 
 - **A verification command that returns nothing for two different reasons.**
   0.9d checked its work with `RUSTFLAGS="-W missing_docs" cargo check --lib |
