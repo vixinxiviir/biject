@@ -1,3 +1,7 @@
+//! Row-level comparison of two datasets, matched on a key.
+//!
+//! Exposes the public API for data diffing, export formats and tolerance.
+
 use crate::connectors;
 use anyhow::{anyhow, Result};
 use chrono::Local;
@@ -15,31 +19,47 @@ use std::path::{Path, PathBuf};
 const COMPOSITE_KEY_SEP: &str = "::";
 
 #[derive(Clone, Debug, ValueEnum)]
+/// Format for exporting comparison results.
 pub enum ExportFormat {
+    /// CSV file.
     Csv,
+    /// JSON file.
     Json,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 #[value(rename_all = "kebab-case")]
+/// When the tool should exit with a non-zero status.
 pub enum FailOn {
+    /// On any difference.
     Any,
+    /// Only on breaking changes.
     Breaking,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
+/// Format for batch manifests.
 pub enum ManifestFormat {
+    /// JSON manifest.
     Json,
+    /// CSV manifest.
     Csv,
 }
 
 #[derive(Clone, Debug)]
+/// Errors that can arise during data comparison.
 pub enum DataDiffError {
+    /// Error from CLI command execution.
     CLICommandError(String),
+    /// A required key column is missing.
     MissingKeyColumn(String),
+    /// Data content error.
     DataContentError(String),
+    /// File not found.
     FileNotFound(String),
+    /// Invalid manifest entry.
     InvalidManifestEntry(String),
+    /// Schema mismatch between source and target.
     SchemaMismatch(String),
 }
 
@@ -466,6 +486,7 @@ fn values_equal(
     left == right
 }
 
+/// Compare two datasets row by row, matched on keys.
 pub fn data_diff(
     source: &str,
     target: &str,
@@ -528,6 +549,7 @@ pub fn data_diff(
     Ok(())
 }
 
+/// Run multiple data comparisons from a manifest.
 pub fn batch_diff(
     manifest_path: &str,
     manifest_format: Option<ManifestFormat>,
@@ -1661,6 +1683,7 @@ fn is_numeric(dtype: &DataType) -> bool {
     )
 }
 
+/// Validate export arguments for consistency.
 pub fn validate_export_args(
     output: Option<&str>,
     format: Option<&ExportFormat>,

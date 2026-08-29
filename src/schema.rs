@@ -1,3 +1,7 @@
+//! Schema comparison of two tables or files, reporting structural differences.
+//!
+//! Includes catalog-derived metadata when available and a scope statement.
+
 use crate::catalog::{self, CatalogAvailability, ConstraintKind, MetadataChange};
 use crate::connectors;
 use anyhow::{anyhow, Result};
@@ -47,18 +51,28 @@ fn compared() -> Vec<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Severity of a type change between source and target columns.
 pub enum TypeChangeImpact {
+    /// A widening conversion that preserves all values, e.g., INT to BIGINT.
     SafePromotion,
+    /// A conversion that may lose information or require coercion.
     RiskyConversion,
+    /// A conversion that will likely break existing data or queries.
     Breaking,
 }
 
 #[derive(Clone, Debug)]
+/// Errors that can arise during schema comparison.
 pub enum SchemaDiffError {
+    /// The type for a column could not be determined.
     MissingColumnType(String),
+    /// The schema violates a policy.
     PolicyViolation(String),
+    /// The policy file could not be parsed.
     InvalidPolicyFile(String),
+    /// Loading data or catalog failed.
     DataLoadError(String),
+    /// A policy requires failing on a violation.
     FailOnViolation(String),
 }
 
@@ -105,46 +119,69 @@ impl From<anyhow::Error> for SchemaDiffError {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A type difference between source and target columns.
 pub struct TypeChange {
+    /// Column name.
     pub column: String,
+    /// Type as inferred from source data.
     pub source_type: String,
+    /// Type as inferred from target data.
     pub target_type: String,
+    /// How severe the change is.
     pub impact: TypeChangeImpact,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A suggested rename between source and target columns.
 pub struct RenameSuggestion {
+    /// Column name in source.
     pub source_column: String,
+    /// Column name in target.
     pub target_column: String,
+    /// Similarity score.
     pub score: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Summary of compatibility between source and target schemas.
 pub struct CompatibilitySummary {
+    /// Can existing consumers read the target?
     pub backward_compatible: bool,
+    /// Can existing producers write to the target?
     pub forward_compatible: bool,
+    /// Reasons compatibility is broken.
     pub breaking_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
+/// Result of comparing two schemas.
 pub struct SchemaDiffResult {
+    /// Label for source.
     pub source_path: String,
+    /// Label for target.
     pub target_path: String,
     /// Every source column mapped to its type, so consumers that need to act on
     /// `added` or `removed` can look up the type rather than reloading the data.
     pub source_schema: BTreeMap<String, String>,
     /// Every target column mapped to its type.
     pub target_schema: BTreeMap<String, String>,
+    /// Columns present in target but not source.
     pub added: Vec<String>,
+    /// Columns present in source but not target.
     pub removed: Vec<String>,
+    /// Type differences for common columns.
     pub type_changes: Vec<TypeChange>,
+    /// Suggested renames for removed/added columns.
     pub rename_suggestions: Vec<RenameSuggestion>,
+    /// Compatibility summary.
     pub compatibility: CompatibilitySummary,
     /// Schema detail only the database's own catalog can supply: declared
     /// types, nullability, defaults. Carries why it is missing when it is.
     pub metadata: MetadataReport,
+    /// Policy violations found.
     pub policy_violations: Vec<String>,
+    /// Whether policy passed, if a policy was used.
     pub policy_passed: Option<bool>,
     /// What this comparison examined, and what it never examines.
     ///
@@ -161,8 +198,11 @@ pub struct SchemaDiffResult {
 /// otherwise.
 #[derive(Debug, Clone, Serialize)]
 pub struct MetadataReport {
+    /// Availability of source catalog.
     pub source: CatalogAvailability,
+    /// Availability of target catalog.
     pub target: CatalogAvailability,
+    /// Catalog-derived changes.
     pub changes: Vec<MetadataChange>,
 }
 
@@ -281,7 +321,6 @@ struct AllowedTypeChange {
     to: String,
 }
 
-/// Returns structured schema diff data from pre-loaded DataFrames. Used by the GUI when sources are SQL Server or other connectors.
 /// Compare two frames, supplying catalog metadata read from their sources.
 ///
 /// For embedders that hold connection details and can read a catalog. The
@@ -305,6 +344,7 @@ pub fn run_schema_diff_frames_with_catalog(
     )
 }
 
+/// Returns structured schema diff data from pre-loaded DataFrames. Used by the GUI when sources are SQL Server or other connectors.
 pub fn run_schema_diff_frames(
     df1: DataFrame,
     df2: DataFrame,
@@ -437,6 +477,7 @@ fn run_schema_diff_inner(
     })
 }
 
+/// Compare schemas from sources, optionally writing a report.
 pub fn schema_diff(
     source: &str,
     target: &str,

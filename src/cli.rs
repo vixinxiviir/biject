@@ -21,11 +21,15 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+/// Subcommands for the CLI.
 pub enum Commands {
+    /// Compare the structure of two tables or files.
     Schema {
+        /// Source table, file or database URI.
         #[arg(short, long)]
         source: String,
 
+        /// Target table, file or database URI.
         #[arg(short, long)]
         target: String,
 
@@ -61,10 +65,13 @@ pub enum Commands {
         )]
         fail_on: Option<data::FailOn>,
     },
+    /// Compare the rows of two tables or files, matched on a key.
     Data {
+        /// Source table, file or database URI.
         #[arg(short, long)]
         source: String,
 
+        /// Target table, file or database URI.
         #[arg(short, long)]
         target: String,
 
@@ -80,15 +87,19 @@ pub enum Commands {
         )]
         target_query: Option<String>,
 
+        /// Columns used to match rows.
         #[arg(short, long, required = true)]
         key: Vec<String>,
 
+        /// File to write the comparison to; requires --format.
         #[arg(long)]
         output: Option<String>,
 
+        /// Export format: json or csv; requires --output.
         #[arg(long, value_enum)]
         format: Option<data::ExportFormat>,
 
+        /// Write output to a timestamped temporary directory instead of --output.
         #[arg(long)]
         temp: bool,
 
@@ -120,6 +131,7 @@ pub enum Commands {
         )]
         json: bool,
     },
+    /// Run many data comparisons from a manifest.
     Batch {
         #[arg(
             long,
@@ -134,12 +146,15 @@ pub enum Commands {
         )]
         manifest_format: Option<data::ManifestFormat>,
 
+        /// Columns used to match rows.
         #[arg(short, long, required = true)]
         key: Vec<String>,
 
+        /// File to write the comparison to; requires --format.
         #[arg(long)]
         output: Option<String>,
 
+        /// Export format: json or csv; requires --output.
         #[arg(long, value_enum)]
         format: Option<data::ExportFormat>,
 
