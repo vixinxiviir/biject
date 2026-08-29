@@ -20,11 +20,17 @@ pub struct ConnectionProfile {
 }
 
 #[derive(Debug)]
+/// Errors that can occur while managing connection profiles.
 pub enum ProfileError {
+    /// I/O error.
     Io(std::io::Error),
+    /// JSON serialization error.
     Json(serde_json::Error),
+    /// Keychain error.
     Keyring(String),
+    /// Profile not found.
     NotFound(String),
+    /// Duplicate profile name.
     DuplicateName(String),
 }
 

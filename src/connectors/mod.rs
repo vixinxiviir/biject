@@ -1,3 +1,5 @@
+//! Connectors for reading data and catalogs from files and databases.
+
 pub mod csv;
 pub mod mysql;
 pub mod postgres;
@@ -94,11 +96,17 @@ impl SourceConfig {
 }
 
 #[derive(Debug)]
+/// Errors that can occur while loading data or catalogs.
 pub enum ConnectorError {
+    /// Failed to connect to the source.
     ConnectionFailed(String),
+    /// Query execution failed.
     QueryFailed(String),
+    /// Type conversion failed.
     TypeConversion(String),
+    /// Polars error.
     Polars(polars::error::PolarsError),
+    /// I/O error.
     Io(std::io::Error),
 }
 

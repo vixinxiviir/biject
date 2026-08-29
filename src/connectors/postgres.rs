@@ -41,6 +41,10 @@ fn describe(error: &tokio_postgres::Error) -> String {
     text
 }
 
+/// Connect to PostgreSQL and execute a query, returning the result as a Polars DataFrame.
+///
+/// `query` may be either a bare table/schema reference (`"public.customers"`) or a full SELECT statement.
+/// Columns keep their types; reading everything as text would disable numeric tolerance and hide type changes.
 pub async fn load_async(
     host: &str,
     port: u16,

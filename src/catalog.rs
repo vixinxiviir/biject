@@ -24,11 +24,13 @@ use serde::Serialize;
 /// One column, as the database declares it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ColumnDef {
+    /// Column name as reported by the catalog. Engine-generated, so do not compare across engines.
     pub name: String,
     /// The native type, as written in the catalog: `character varying(50)`,
     /// `bigint`, `timestamp with time zone`. Not a Polars type — the whole
     /// point is to see distinctions Polars erases.
     pub data_type: String,
+    /// Whether the column permits NULL values.
     pub nullable: bool,
     /// Default expression as the catalog stores it, e.g. `now()` or `'0'::text`.
     pub default: Option<String>,
@@ -46,14 +48,19 @@ pub struct ColumnDef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Constraint {
+    /// Primary key constraint enforcing uniqueness and non-null.
     PrimaryKey {
+        /// Name assigned by the engine; do not compare across engines.
         name: String,
         /// In key order, which matters: `(a, b)` and `(b, a)` serve different
         /// queries even though they forbid the same duplicates.
         columns: Vec<String>,
     },
+    /// Unique constraint enforcing uniqueness.
     Unique {
+        /// Name assigned by the engine; do not compare across engines.
         name: String,
+        /// Columns covered by the constraint, in key order.
         columns: Vec<String>,
     },
     /// A row-level rule, such as `amount > 0`.
@@ -62,7 +69,9 @@ pub enum Constraint {
     /// typed — PostgreSQL stores `CHECK (amount > 0)` and hands back
     /// `((amount > 0))`. Comparable within one engine, not across two.
     Check {
+        /// Name assigned by the engine; do not compare across engines.
         name: String,
+        /// Check expression as stored by the catalog.
         expression: String,
     },
     /// A reference from this table's columns to another table's.
@@ -75,6 +84,7 @@ pub enum Constraint {
     /// `dbo` mean the same thing is a claim about someone's schema layout, not
     /// a fact.
     ForeignKey {
+        /// Name assigned by the engine; do not compare across engines.
         name: String,
         /// Columns in *this* table, in key order.
         columns: Vec<String>,
@@ -83,7 +93,9 @@ pub enum Constraint {
         referenced_table: String,
         /// Columns in the referenced table, paired positionally with `columns`.
         referenced_columns: Vec<String>,
+        /// Action taken when the referenced row is deleted.
         on_delete: ReferentialAction,
+        /// Action taken when the referenced row is updated.
         on_update: ReferentialAction,
     },
 }
@@ -100,14 +112,20 @@ pub enum Constraint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
+    /// Primary key constraint.
     PrimaryKey,
+    /// Unique constraint.
     Unique,
+    /// Check constraint.
     Check,
+    /// Index.
     Index,
+    /// Foreign key constraint.
     ForeignKey,
 }
 
 impl ConstraintKind {
+    /// All constraint kinds that can be reported.
     pub const ALL: [ConstraintKind; 5] = [
         ConstraintKind::PrimaryKey,
         ConstraintKind::Unique,
@@ -135,10 +153,15 @@ impl fmt::Display for ConstraintKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferentialAction {
+    /// No action taken.
     NoAction,
+    /// Prevent deletion or update if referencing rows exist.
     Restrict,
+    /// Delete or update referencing rows automatically.
     Cascade,
+    /// Set referencing columns to NULL.
     SetNull,
+    /// Set referencing columns to their default value.
     SetDefault,
     /// Something the engine reported that this does not recognise.
     ///
@@ -162,6 +185,7 @@ impl fmt::Display for ReferentialAction {
 }
 
 impl Constraint {
+    /// The kind of constraint this is.
     pub fn kind(&self) -> ConstraintKind {
         match self {
             Constraint::PrimaryKey { .. } => ConstraintKind::PrimaryKey,
@@ -171,6 +195,7 @@ impl Constraint {
         }
     }
 
+    /// The name assigned by the engine.
     pub fn name(&self) -> &str {
         match self {
             Constraint::PrimaryKey { name, .. }
@@ -270,9 +295,11 @@ impl fmt::Display for Constraint {
 /// and listing both would double-count every key in the table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IndexDef {
+    /// Name assigned by the engine; do not compare across engines.
     pub name: String,
     /// In index order, which determines the queries it can serve.
     pub columns: Vec<String>,
+    /// Whether the index enforces uniqueness.
     pub unique: bool,
 }
 
@@ -298,11 +325,21 @@ impl fmt::Display for IndexDef {
 /// `#[non_exhaustive]`: this grew from columns alone in 0.6, and it will grow
 /// again. Build one with [`TableCatalog::new`] and the `with_` methods rather
 /// than a struct literal.
+///
+/// ```rust
+/// use biject::catalog::{ColumnDef, TableCatalog};
+/// let catalog = TableCatalog::new(vec![ColumnDef { name: "id".into(), data_type: "integer".into(), nullable: false, default: None, ordinal: 1 }])
+///     .with_unread(vec![]);
+/// assert_eq!(catalog.columns.len(), 1);
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct TableCatalog {
+    /// Columns in ordinal order.
     pub columns: Vec<ColumnDef>,
+    /// Constraints enforced by the table.
     pub constraints: Vec<Constraint>,
+    /// Indexes defined on the table.
     pub indexes: Vec<IndexDef>,
     /// Constraint kinds this connector could not read for this table.
     ///
@@ -314,6 +351,7 @@ pub struct TableCatalog {
 }
 
 impl TableCatalog {
+    /// Create a catalog with columns only.
     pub fn new(columns: Vec<ColumnDef>) -> Self {
         Self {
             columns,
@@ -321,11 +359,13 @@ impl TableCatalog {
         }
     }
 
+    /// Set constraints on the catalog.
     pub fn with_constraints(mut self, constraints: Vec<Constraint>) -> Self {
         self.constraints = constraints;
         self
     }
 
+    /// Set indexes on the catalog.
     pub fn with_indexes(mut self, indexes: Vec<IndexDef>) -> Self {
         self.indexes = indexes;
         self
@@ -342,6 +382,7 @@ impl TableCatalog {
         !self.unread.contains(&kind)
     }
 
+    /// Return columns keyed by name.
     pub fn by_name(&self) -> BTreeMap<&str, &ColumnDef> {
         self.columns
             .iter()
@@ -349,10 +390,12 @@ impl TableCatalog {
             .collect()
     }
 
+    /// Find a column by name.
     pub fn column(&self, name: &str) -> Option<&ColumnDef> {
         self.columns.iter().find(|column| column.name == name)
     }
 
+    /// Find the primary key constraint, if any.
     pub fn primary_key(&self) -> Option<&Constraint> {
         self.constraints
             .iter()
@@ -382,22 +425,32 @@ pub enum CatalogAvailability {
     /// a typo looks like, and it is also what a table you have not created yet
     /// looks like — and a caller has to be able to tell the two apart from a
     /// connection that dropped.
-    TableNotFound { table: String },
+    TableNotFound {
+        /// Name of the missing table.
+        table: String,
+    },
     /// The source is a database and the query names a table, but reading the
     /// catalog failed. Carries the reason; never silently treated as absent.
     ///
     /// A struct variant, not a newtype: serde cannot serialise a tagged newtype
     /// variant holding a plain string, and this enum is internally tagged.
-    Failed { reason: String },
+    Failed {
+        /// Reason the catalog read failed.
+        reason: String,
+    },
     /// This connector cannot read catalogs yet. Distinct from a failure: the
     /// lookup was never attempted because the code does not exist.
-    UnsupportedEngine { engine: String },
+    UnsupportedEngine {
+        /// Engine name that is not supported.
+        engine: String,
+    },
     /// The caller did not ask for metadata. Distinct from every other variant:
     /// nothing was wrong, nothing was tried.
     NotRequested,
 }
 
 impl CatalogAvailability {
+    /// Return the catalog if it is available.
     pub fn catalog(&self) -> Option<&TableCatalog> {
         match self {
             CatalogAvailability::Available(catalog) => Some(catalog),
@@ -405,11 +458,18 @@ impl CatalogAvailability {
         }
     }
 
+    /// Whether the catalog was read successfully.
     pub fn is_available(&self) -> bool {
         matches!(self, CatalogAvailability::Available(_))
     }
 
     /// Why metadata is missing, phrased for a user reading a diff report.
+    ///
+    /// ```rust
+    /// use biject::catalog::{CatalogAvailability, TableCatalog};
+    /// let av = CatalogAvailability::Available(TableCatalog::default());
+    /// assert_eq!(av.explain(), None);
+    /// ```
     pub fn explain(&self) -> Option<String> {
         match self {
             CatalogAvailability::Available(_) => None,
@@ -491,32 +551,60 @@ pub enum MetadataChange {
     /// The declared type changed in a way Polars cannot see, such as
     /// `character varying(50)` becoming `text`.
     NativeType {
+        /// Name of the column.
         column: String,
+        /// Declared type before the change.
         from: String,
+        /// Declared type after the change.
         to: String,
+        /// Impact of the change on readers.
         impact: TypeImpact,
     },
     /// A column became nullable, or stopped being.
     Nullability {
+        /// Name of the column.
         column: String,
         /// True when the target permits nulls.
         now_nullable: bool,
     },
+    /// Default expression changed.
     Default {
+        /// Name of the column.
         column: String,
+        /// Default before the change.
         from: Option<String>,
+        /// Default after the change.
         to: Option<String>,
     },
     /// Position changed. Rarely meaningful, but `SELECT *` consumers care.
-    Ordinal { column: String, from: u32, to: u32 },
+    Ordinal {
+        /// Name of the column.
+        column: String,
+        /// Position before the change.
+        from: u32,
+        /// Position after the change.
+        to: u32,
+    },
     /// A constraint the source enforces and the target does not.
-    ConstraintMissing { constraint: Constraint },
+    ConstraintMissing {
+        /// The missing constraint.
+        constraint: Constraint,
+    },
     /// A constraint the target enforces and the source does not.
-    ConstraintExtra { constraint: Constraint },
+    ConstraintExtra {
+        /// The extra constraint.
+        constraint: Constraint,
+    },
     /// An index the source has and the target lacks.
-    IndexMissing { index: IndexDef },
+    IndexMissing {
+        /// The missing index.
+        index: IndexDef,
+    },
     /// An index the target has and the source lacks.
-    IndexExtra { index: IndexDef },
+    IndexExtra {
+        /// The extra index.
+        index: IndexDef,
+    },
 }
 
 impl MetadataChange {

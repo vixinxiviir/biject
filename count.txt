@@ -1,0 +1,130 @@
+warning: missing documentation for the crate
+  = note: requested on the command line with `-W missing-docs`
+warning: missing documentation for a module
+warning: missing documentation for a module
+warning: missing documentation for a struct
+warning: missing documentation for a struct field
+warning: missing documentation for an enum
+warning: missing documentation for a variant
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a variant
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a variant
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a module
+warning: missing documentation for a module
+warning: missing documentation for a module
+warning: missing documentation for a module
+warning: missing documentation for a module
+warning: missing documentation for a module
+warning: missing documentation for a variant
+warning: missing documentation for a struct field
+warning: missing documentation for a variant
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a variant
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for an enum
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for an enum
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for an enum
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for an enum
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a function
+warning: missing documentation for a function
+warning: missing documentation for a function
+warning: missing documentation for an enum
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for an enum
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a variant
+warning: missing documentation for a struct
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a struct field
+warning: missing documentation for a function
+warning: missing documentation for a function

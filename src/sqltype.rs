@@ -20,6 +20,12 @@ pub struct CanonicalType {
 }
 
 /// Reduce a declared type to its canonical form.
+///
+/// ```rust
+/// use biject::sqltype::canonical;
+/// assert_eq!(canonical("VARCHAR(50)"), canonical("character varying(50)"));
+/// assert!(!canonical("geography").recognised);
+/// ```
 pub fn canonical(declared: &str) -> CanonicalType {
     // 1. Trim, lowercase, and collapse whitespace.
     let normalized = declared

@@ -9,16 +9,22 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// SQL dialect supported by the tool.
 pub enum Dialect {
+    /// PostgreSQL.
     Postgres,
+    /// MySQL.
     MySql,
+    /// Microsoft SQL Server.
     SqlServer,
+    /// SQLite.
     Sqlite,
 }
 
 /// Why a canonical type cannot be written for a dialect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsupportedType {
+    /// Dialect for which the type is unsupported.
     pub dialect: Dialect,
     /// The canonical base that could not be rendered.
     pub base: String,
@@ -47,6 +53,11 @@ impl Dialect {
     ///
     /// Always quotes. An unquoted identifier is folded to lower case by
     /// PostgreSQL and may be a reserved word elsewhere.
+    ///
+    /// ```rust
+    /// use biject::sqldialect::Dialect;
+    /// assert_eq!(Dialect::Postgres.quote_ident("a\"b"), "\"a\"\"b\"");
+    /// ```
     pub fn quote_ident(&self, name: &str) -> String {
         match self {
             Dialect::Postgres | Dialect::Sqlite => {
@@ -95,6 +106,15 @@ impl Dialect {
     }
 
     /// Write a canonical type as this engine's own type text.
+    ///
+    /// ```rust
+    /// use biject::sqldialect::Dialect;
+    /// use biject::sqltype::canonical;
+    /// let ty = canonical("varchar(50)");
+    /// assert_eq!(Dialect::Postgres.render_type(&ty).unwrap(), "varchar(50)");
+    /// let unknown = canonical("geography");
+    /// assert!(Dialect::Postgres.render_type(&unknown).is_err());
+    /// ```
     pub fn render_type(
         &self,
         ty: &crate::sqltype::CanonicalType,
