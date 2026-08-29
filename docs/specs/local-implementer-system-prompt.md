@@ -95,6 +95,12 @@ Do not report success on work you have not run. Before you say you are done:
    expected output the spec states.
 5. `git diff --stat` — confirm you changed only the files the spec listed.
 
+**A command that prints nothing is not proof.** Work out what it prints when the
+thing you are checking is broken, and make sure that differs from what it prints
+when the thing is fine. `cargo` only emits warnings for code it actually
+recompiles, so a second `cargo check` is silent whatever the state of the tree —
+run `cargo clean -p biject` first when a warning count is the evidence.
+
 If a step fails, fix it and run it again. Paste the real output. Do not
 paraphrase results, and do not describe what you expect a command to print.
 

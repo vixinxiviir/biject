@@ -28,8 +28,8 @@ Order matters only where "depends on" says so.
 | [0.9a-foreign-keys-model-and-postgres](0.9a-foreign-keys-model-and-postgres.md) | Done — `d4e826c` | — |
 | [0.9b-foreign-keys-remaining-engines](0.9b-foreign-keys-remaining-engines.md) | Done — `b5a608e` | 0.9a |
 | [0.9c-name-what-is-not-compared](0.9c-name-what-is-not-compared.md) | Done — `bbddb97` | 0.9a, 0.9b |
-| [0.9d-document-the-api-database-half](0.9d-document-the-api-database-half.md) | Open | 0.9a, 0.9b |
-| [0.9e-document-the-api-command-half](0.9e-document-the-api-command-half.md) | Open | 0.9d |
+| [0.9d-document-the-api-database-half](0.9d-document-the-api-database-half.md) | Done — `faf4920`, finished in `460b9aa` | 0.9a, 0.9b |
+| [0.9e-document-the-api-command-half](0.9e-document-the-api-command-half.md) | Done — `a68da95`, finished in `460b9aa` | 0.9d |
 | [0.9f-freeze-the-public-api](0.9f-freeze-the-public-api.md) | Open | 0.9a, 0.9b, 0.9c |
 
 The dependency chain is real this time: 0.9a defines a type that 0.9b, 0.9c,
@@ -132,6 +132,19 @@ knowledge about databases rather than migration generation:
 
 ## Notes from the 0.9 round
 
+- **A verification command that returns nothing for two different reasons.**
+  0.9d checked its work with `RUSTFLAGS="-W missing_docs" cargo check --lib |
+  findstr <file>`, once per file, and reported no output for all six. Cargo only
+  prints warnings when something recompiles, so every run after the first was
+  silent whatever the state of the code. Fifty-four warnings remained, half of
+  them in files 0.9d owned. **A count spec must say `cargo clean -p <crate>`
+  first**, and prefer one command printing a number over six printing nothing.
+- **A scope boundary can launder an unfinished dependency.** 0.9e then declined
+  to enable `#![deny(missing_docs)]`, correctly noting that `src/connectors/` was
+  outside its own scope — but that was 0.9d's scope, and 0.9d had not finished
+  it. Each spec was defensible alone and the release goal fell through the gap.
+  When spec B's completion depends on spec A's, B has to verify A's claim rather
+  than assume it.
 - **A report claimed output for a command it could not run.** 0.9b's summary
   pasted a full `biject schema` transcript for its SQLite demo. The command had
   never produced it — the format is not this tool's, and the real run said
