@@ -21,7 +21,33 @@ sitting, it should have been two specs.
 
 Order matters only where "depends on" says so.
 
-### 0.9 — open
+### 1.0 — open
+
+| Spec | Status | Depends on |
+| --- | --- | --- |
+| [1.0a-desktop-reports-what-the-cli-reports](1.0a-desktop-reports-what-the-cli-reports.md) | Open | — |
+| [1.0b-desktop-states-its-scope](1.0b-desktop-states-its-scope.md) | Open | 1.0a |
+
+**1.0a first, and it is a defect rather than a feature.** The app renders a
+foreign key as the bare word `foreign_key` and never shows the scope footer, so
+it reports less than the CLI without saying so. Both are `tauri-app/ui/index.html`
+— the first specs here that are JavaScript rather than Rust, and the first
+allowed to touch `tauri-app/` at all.
+
+### What is left for 1.0 that is *not* in this queue
+
+Most of it. See [`docs/road-to-1.0.md`](../road-to-1.0.md) for the ordered plan.
+
+- **Cross-platform release binaries.** `.github/workflows/release.yml` is
+  `ubuntu-latest` for both jobs. CI work, unverifiable from a local checkout, and
+  the standing brief forbids editing `.github/`.
+- **The paid product's release machinery.** `biject-pro` has no CI at all, and
+  the licence issuer has never been run in anger. Private repository.
+- **The 1.0 commitments** — acting on `docs/api-surface.md`, declaring an MSRV,
+  and stating what the API and output formats promise. Decisions first, and the
+  changes that follow are one-line each.
+
+### 0.9 — done
 
 | Spec | Status | Depends on |
 | --- | --- | --- |
@@ -35,9 +61,6 @@ Order matters only where "depends on" says so.
 The dependency chain is real this time: 0.9a defines a type that 0.9b, 0.9c,
 0.9d and 0.9f all describe or extend. Handing out 0.9d before 0.9a means
 documenting `Constraint` twice.
-
-**The queue is empty.** What is left before 1.0 is not implementer work:
-cross-platform release binaries, the desktop app's scope, and publishing 0.9.0.
 
 **Hand out 0.9a first.** It is the smallest of the foreign key specs and it
 decides the model the other three consume. Review it properly before 0.9b goes

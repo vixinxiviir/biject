@@ -31,7 +31,11 @@ Layout of the repository you are working in:
 - `tests/` — integration tests that need live database servers. They are
   `#[ignore]` by default. You will usually not need to run them.
 - `tauri-app/` — a desktop front end. A separate crate with its own lockfile.
-  **Do not modify it** unless the spec says to.
+  **Do not modify it** unless the spec says to. Its interface is
+  `tauri-app/ui/index.html`: plain HTML, CSS and JavaScript in one file, served
+  as-is with no build step. A spec that sends you there is asking for
+  JavaScript, and the rules below about comments, naming and matching the
+  surrounding code apply to it unchanged.
 
 ## The one rule this project is built around
 
