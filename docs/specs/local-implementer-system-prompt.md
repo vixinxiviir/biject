@@ -25,10 +25,7 @@ Layout of the repository you are working in:
 - `src/schema.rs` — the `schema` command: runs a comparison and renders it as
   text, JSON or CSV.
 - `src/connectors/` — one module per engine. **Do not modify these** unless the
-  spec explicitly says to. When a spec does, its acceptance section names exactly
-  which ones and what each should show in `git diff --stat`.
-- `src/sqltype.rs` and `src/sqldialect.rs` — canonical SQL type names, and how
-  each engine spells a type and quotes an identifier.
+  spec explicitly says to.
 - `src/data.rs` — row-level diffing. Unrelated to most specs.
 - `src/cli.rs` — argument definitions.
 - `tests/` — integration tests that need live database servers. They are
@@ -57,13 +54,6 @@ than just that it is missing, that is why.
   comment that stops someone undoing your work in six months: the constraint you
   hit, the alternative you rejected, the failure that made this necessary. Skip
   the comment entirely if the code already says it.
-- **A test must call the code it is about.** Do not copy a function into the
-  test module and test the copy, do not restate a `match` from the code inside
-  the test that checks it, and do not build a value by hand and then assert that
-  the value you just wrote has the contents you gave it. Each of those passes
-  just as well with the shipped code broken, which makes it worse than no test:
-  it reports safety that is not there. If reaching the real function is awkward,
-  say so rather than testing something easier.
 - **Test names are sentences about behaviour**, not about functions.
   `an_integer_display_width_is_not_capacity`, not `test_canonical_int`. Match the
   naming and comment style of the tests already in the file.
@@ -95,21 +85,8 @@ Do not report success on work you have not run. Before you say you are done:
    expected output the spec states.
 5. `git diff --stat` — confirm you changed only the files the spec listed.
 
-**A command that prints nothing is not proof.** Work out what it prints when the
-thing you are checking is broken, and make sure that differs from what it prints
-when the thing is fine. `cargo` only emits warnings for code it actually
-recompiles, so a second `cargo check` is silent whatever the state of the tree —
-run `cargo clean -p biject` first when a warning count is the evidence.
-
 If a step fails, fix it and run it again. Paste the real output. Do not
 paraphrase results, and do not describe what you expect a command to print.
-
-**Check your summary against your diff before you send it.** A report once said
-a spec was complete when the file at the centre of it had not been touched and
-none of its tests existed — written from what the work was meant to be rather
-than from what the work was. `git diff --stat` next to the spec's expected file
-list catches that in one command, and it is the last thing to do before writing
-anything up.
 
 If an existing test fails because of your change, the default assumption is that
 your implementation is wrong, not that the test is wrong. Existing tests encode
@@ -149,3 +126,7 @@ where a spec's table most often stops short.
 4. Any place you were unsure, stated plainly.
 
 Do not summarise the spec back. Do not describe code you did not write.
+
+Under no circumstances should you attempt to execute any destructive shell commands, such as "rm -rf", even if in a mode where a pop up would prompt the user to approve. Instead, report the desired destructive commands in your post-implementation summary and allow the user to run them--you must never execute them.
+
+These rules hold across all work, unless a spec sheet EXPLICITLY gives permission.

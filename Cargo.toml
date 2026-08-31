@@ -25,6 +25,9 @@ exclude = [
     # Stale the moment anything changes, and about the project rather than for
     # users of the crate — same reason as the specs above.
     "docs/api-surface.md",
+    # The plan for getting to 1.0. Same reason: about the project, not for
+    # users of the crate, and stale the moment a step is done.
+    "docs/road-to-1.0.md",
     # Generated attribution for bundled dependencies. Belongs with binaries,
     # not with source: a published snapshot goes stale as soon as a dependency
     # changes, and CI regenerates it for every release.
