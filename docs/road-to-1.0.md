@@ -117,9 +117,11 @@ buy it:
 2. **Licence issuing, exercised end to end.** `src/bin/issue.rs` exists behind
    the `issuer` feature and has never been run in anger. Issue a licence against
    the offline key, take it to a machine that has never seen the key, and run
-   the paid binary with it. Then try an expired one, a tampered one, and one
-   whose version ceiling is below the binary — each must be refused with a
-   message a buyer can act on.
+   the paid binary with it. Then try a tampered one, and one whose version
+   ceiling is below the binary — each must be refused with a message a buyer can
+   act on. There is no expiry to test: the payload carries `email`, `tier`,
+   `seats`, `issued` and `max_version` and nothing else, and a licence is
+   perpetual for the `MAJOR.MINOR` it was bought against.
 3. **The key's custody.** `secrets/signing.key` is 43 bytes, gitignored, and
    currently exists on one disk plus the NAS. Losing it invalidates every
    licence ever issued and there is no recovery. Decide where the second and
