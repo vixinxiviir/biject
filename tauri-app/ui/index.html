@@ -307,6 +307,10 @@
     <button class="tab-btn" data-tab="schema">Schema Diff</button>
   </nav>
 
+  <div style="margin-bottom:1rem; color:var(--fg4); font-size:0.85rem; line-height:1.4;">
+    This app covers schema and data comparison. Three things are command-line only: running many comparisons from a manifest (<code>biject batch</code>), checking a comparison against a policy file (<code>--policy</code>), and writing results to a file (<code>--output</code>). The command line is installed alongside this app. The desktop app has saved connection profiles; the command line does not.
+  </div>
+
   <!-- ── DATA DIFF TAB ── -->
   <div id="tab-data" class="tab-panel active">
   <article>
@@ -766,6 +770,12 @@
     <section id="s-section-metadata-unread" style="display:none">
       <h3>Not Compared, Because the Source Cannot Report Them</h3>
       <ul id="s-metadata-unread-list"></ul>
+    </section>
+
+    <section id="s-section-scope" style="display:none">
+      <h3>Never Compared, On Any Run</h3>
+      <p style="color:var(--fg4); font-size:0.85rem; margin-top:0.25rem;">The following schema items are never examined by <code>biject schema</code> on any engine.</p>
+      <ul id="s-scope-list"></ul>
     </section>
 
     <section id="s-section-renames" style="display:none">
@@ -1249,6 +1259,21 @@
       }
     }
 
+    function formatReferentialAction(a) {
+      if (a == null) return JSON.stringify(a);
+      if (typeof a === 'string') {
+        return a.toUpperCase().replace(/_/g, ' ');
+      }
+      if (typeof a === 'object') {
+        const keys = Object.keys(a);
+        if (keys.length === 1) {
+          return String(a[keys[0]]);
+        }
+        return JSON.stringify(a);
+      }
+      return JSON.stringify(a);
+    }
+
     function describeConstraint(c) {
       if (!c) return 'constraint';
       switch (c.kind) {
@@ -1258,6 +1283,22 @@
           return `UNIQUE (${(c.columns || []).join(', ')})`;
         case 'check':
           return `CHECK ${c.expression || ''}`;
+        case 'foreign_key': {
+          const cols = (c.columns || []).join(', ');
+          const refCols = (c.referenced_columns || []).join(', ');
+          let parts = [`FOREIGN KEY (${cols}) REFERENCES ${c.referenced_table}(${refCols})`];
+          if (c.on_delete !== undefined && c.on_delete !== null) {
+            if (!(typeof c.on_delete === 'string' && c.on_delete === 'no_action')) {
+              parts.push('ON DELETE ' + formatReferentialAction(c.on_delete));
+            }
+          }
+          if (c.on_update !== undefined && c.on_update !== null) {
+            if (!(typeof c.on_update === 'string' && c.on_update === 'no_action')) {
+              parts.push('ON UPDATE ' + formatReferentialAction(c.on_update));
+            }
+          }
+          return parts.join(' ');
+        }
         default:
           return c.kind;
       }
@@ -1307,6 +1348,8 @@
           return 'unique constraints';
         case 'check':
           return 'check constraints';
+        case 'foreign_key':
+          return 'foreign keys';
         case 'index':
           return 'indexes';
         default:
@@ -1394,6 +1437,15 @@
       unreadList.innerHTML = unread.map(u => `<li>${u}</li>`).join('');
       document.getElementById('s-section-metadata-unread').style.display =
         unread.length ? '' : 'none';
+
+      // Scope is what the tool never examines on any run.
+      if (data.scope) {
+        const scopeList = document.getElementById('s-scope-list');
+        scopeList.innerHTML = (data.scope.not_compared || []).map(i => `<li>${i}</li>`).join('');
+        document.getElementById('s-section-scope').style.display = '';
+      } else {
+        document.getElementById('s-section-scope').style.display = 'none';
+      }
 
       const renamesBody = document.getElementById('s-renames-body');
       renamesBody.innerHTML = data.rename_suggestions.map(r =>

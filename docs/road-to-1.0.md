@@ -54,19 +54,37 @@ in a field that skews to macOS, and it is the oldest item on the 1.0 list.
   which means `.deb`/`.AppImage` on Linux, `.dmg`/`.app` on macOS, `.msi`/`.exe`
   on Windows. The Linux build installs system dependencies that the other two
   do not need and cannot use.
-- **`keyring` is the risk.** The desktop app stores connection passwords through
-  it, and it is a different backend on every platform: Secret Service on Linux,
-  Keychain on macOS, Credential Manager on Windows. It has only ever run on
-  Linux and Windows here. A save-and-reload of a profile has to be exercised on
-  each platform by hand — a CI job proves it compiles, not that it stores
-  anything.
+- **`keyring` needs runtime testing, and Linux is the fragile one.** Only the
+  desktop app uses it — `profiles.rs` is called from `tauri-app/src-tauri` and
+  from nowhere else, so **the CLI, and therefore the paid binary, never touches
+  a keychain.** Where it is used, it is one API over three different system
+  services: Credential Manager on Windows and Keychain on macOS are both part of
+  the OS and always present, while Linux needs a Secret Service provider —
+  gnome-keyring or KWallet — which a minimal or headless install may simply not
+  have.
+
+  So the platform most likely to fail is the one already shipping. A CI job
+  proves it compiles; only saving a profile, closing the app, reopening it and
+  loading the profile back proves it stores anything.
+
+  The code already fails in the right direction: `save_profile` writes the
+  password to the keychain *before* writing metadata to disk, so a keychain that
+  is absent produces an error and no half-saved profile.
 - `rusqlite` already branches on `cfg(target_os = "linux")` to pick bundled
   SQLite. Confirm the non-Linux path builds on macOS as well as Windows.
+- **Building for macOS requires Apple hardware.** Rust can target
+  `aarch64-apple-darwin` from anywhere, but linking needs Apple's SDK, which is
+  licensed for use only on Apple-branded hardware. There is no legitimate
+  cross-compile from Windows. The options are a `macos-latest` GitHub Actions
+  runner — Apple hardware rented by the minute, free for a public repository —
+  or a Mac. For the free crate the runner settles it; for `biject-pro` it means
+  either adding CI to a private repository, where macOS minutes are billed at a
+  multiplier, or owning a Mac.
 - Unsigned macOS and Windows binaries will be blocked by Gatekeeper and
-  SmartScreen. Decide before release whether to sign, or to document the
-  override steps. Signing costs money and an Apple Developer account; saying
-  plainly that the binaries are unsigned is a legitimate 1.0 answer, and the
-  quieter one is not.
+  SmartScreen. That is separate from building, and comes with its own price: an
+  Apple Developer Program membership and a Developer ID certificate to sign and
+  notarise. Saying plainly that the binaries are unsigned, and documenting the
+  right-click-Open step, is a legitimate 1.0 answer. The quieter one is not.
 
 **Done when:** a tagged build produces installable artifacts for all three, and
 each has been downloaded and run on that platform — CLI `--version` and a real

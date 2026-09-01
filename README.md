@@ -97,6 +97,12 @@ Use the desktop app when you want to diff database queries or inspect changes in
 4. For database sources, optionally save connection profiles and reuse them later.
 5. Run the comparison and inspect row-level and schema-level results side by side.
 
+#### Desktop App Scope
+
+The desktop app provides interactive schema and data comparison with saved connection profiles. It does not include batch runs via `biject batch --manifest`, schema policy checks with `--policy`, or exporting results with `--output`/`--format`. Those features are command-line only.
+
+This is a deliberate scope split, not an incomplete port. The CLI offers scripting, batch, policy and export; the app offers saved profiles and an interactive UI. Each surface is complete for its intended use.
+
 ### 1. Basic Schema Comparison
 
 Compare two sources to see what columns changed. These are CSVs; a
