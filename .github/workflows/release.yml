@@ -135,6 +135,9 @@ jobs:
       # Cheap, and it keeps the tree formatted now that it has been done once.
       # Without this the next person to run `cargo fmt` gets a diff across the
       # whole repository mixed into whatever they were actually changing.
+      #
+      # Linux only. Formatting is a property of the source, not of the platform,
+      # so running it three times would just fail three times.
       - name: Check formatting
         run: cargo fmt --check
 
@@ -165,6 +168,64 @@ jobs:
 
       - name: Validate desktop entry
         run: desktop-file-validate packaging/aur/biject.desktop
+
+
+  # macOS and Windows get their own job rather than joining `check` in a matrix,
+  # because `services:` only works on Linux runners: they are Docker containers,
+  # and neither the macOS nor the Windows runner can host a Linux one. The live
+  # database suites therefore stay above, on Linux, where they always run.
+  #
+  # What is left is still worth running on both. Three of the four connectors
+  # compile differently off Linux — rusqlite switches to bundled SQLite, and
+  # keyring switches to Credential Manager and Keychain — so "it builds on
+  # Linux" says nothing about whether it builds at all here.
+  check-portable:
+    strategy:
+      # One platform failing should not hide the other's result.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tauri-app/src-tauri
+          # Without this the two matrix legs share one cache key and fight over
+          # it, and the loser recompiles polars from scratch every run.
+          key: ${{ matrix.os }}
+
+      - name: Prefetch Rust dependencies
+        run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path tauri-app/src-tauri/Cargo.toml
+
+      # The #[ignore]d suites are skipped here for want of a server, which is
+      # the point of them being ignored. Everything else runs.
+      - name: Test CLI crate
+        run: cargo test --frozen --locked --all-targets
+
+      - name: Check Tauri app crate
+        run: cargo check --frozen --locked --manifest-path tauri-app/src-tauri/Cargo.toml
+
+      - name: Lint
+        run: |
+          cargo clippy --frozen --locked --all-targets -- \
+            -D warnings \
+            -A clippy::too_many_arguments \
+            -A clippy::needless_range_loop \
+            -A clippy::match_ref_pats
 
   linux-artifacts:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -252,6 +313,139 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: biject-linux-${{ github.ref_name }}
+          path: dist/
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+  # The same binaries for the platforms that have no distro packaging. Separate
+  # from linux-artifacts because almost none of that job transfers: the vendor
+  # archive, PKGBUILD, .SRCINFO and the desktop entry are all AUR-specific, and
+  # the AUR only ships Linux.
+  mac-windows-artifacts:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, check-portable]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+          - os: windows-latest
+            name: windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        # The Windows runner's default shell is PowerShell, where none of the
+        # scripts below parse. Git Bash ships on every runner, so one script
+        # works on all three platforms rather than needing a PowerShell twin.
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # A Mac sold today is Apple Silicon and the runner matches, so an
+      # unqualified build produces an arm64 binary that will not start on an
+      # Intel Mac. Both are built and merged below into one file that runs on
+      # either, which is also what makes the result testable in an x86 VM.
+      - name: Add the Intel macOS target
+        if: matrix.os == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tauri-app/src-tauri
+          key: ${{ matrix.os }}-release
+
+      - name: Prefetch Rust dependencies
+        run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path tauri-app/src-tauri/Cargo.toml
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      # Regenerated per platform rather than copied from the Linux job. The
+      # dependency tree genuinely differs — rusqlite bundles SQLite here, and
+      # keyring pulls a different backend — so Linux's notices would be wrong
+      # for these binaries. If this step fails, a crate that only builds on this
+      # platform has a licence nobody has reviewed, which is worth knowing.
+      - name: Generate third-party notices
+        run: cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
+
+      - name: Build CLI binary
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cargo build --frozen --release --locked --bin biject --target aarch64-apple-darwin
+            cargo build --frozen --release --locked --bin biject --target x86_64-apple-darwin
+          else
+            cargo build --frozen --release --locked --bin biject
+          fi
+
+      - name: Build desktop binary
+        run: |
+          MANIFEST=tauri-app/src-tauri/Cargo.toml
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cargo build --frozen --release --locked --manifest-path "$MANIFEST" --target aarch64-apple-darwin
+            cargo build --frozen --release --locked --manifest-path "$MANIFEST" --target x86_64-apple-darwin
+          else
+            cargo build --frozen --release --locked --manifest-path "$MANIFEST"
+          fi
+
+      # These are plain executables, not a .app bundle or an .msi. That matches
+      # what the Linux job has always shipped, and keeps this change to one
+      # thing. Bundling needs the Tauri CLI and is worth doing separately.
+      - name: Stage release artifacts
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            # lipo merges the two architectures into one universal binary.
+            lipo -create -output dist/biject \
+              target/aarch64-apple-darwin/release/biject \
+              target/x86_64-apple-darwin/release/biject
+            lipo -create -output dist/biject-gui \
+              tauri-app/src-tauri/target/aarch64-apple-darwin/release/biject-gui \
+              tauri-app/src-tauri/target/x86_64-apple-darwin/release/biject-gui
+            lipo -info dist/biject dist/biject-gui
+          else
+            cp target/release/biject.exe dist/
+            cp tauri-app/src-tauri/target/release/biject-gui.exe dist/
+          fi
+          cp LICENSE dist/
+          cp THIRD-PARTY-NOTICES.txt dist/
+          (cd dist && sha256sum * > sha256sums.txt)
+          cat dist/sha256sums.txt
+
+      # Proves the thing that was just built actually starts. A binary that
+      # links but cannot run is exactly what a cross-platform build produces
+      # when a system library is missing, and it would otherwise be found by
+      # whoever downloaded it.
+      - name: Smoke-test the CLI
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            ./dist/biject --version
+            ./dist/biject schema --source examples/customers_v1.csv --target examples/customers_v2.csv
+          else
+            ./dist/biject.exe --version
+            ./dist/biject.exe schema --source examples/customers_v1.csv --target examples/customers_v2.csv
+          fi
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: biject-${{ matrix.name }}-${{ github.ref_name }}
           path: dist/
 
       - name: Publish GitHub release assets

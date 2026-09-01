@@ -1,0 +1,15 @@
+# Link the MSVC runtime statically on Windows.
+#
+# Without this a release binary imports vcruntime140.dll, which is present on
+# most Windows machines and absent on some — and the failure lands on whoever
+# downloaded it, as a missing-DLL dialog rather than an error message.
+#
+# Here rather than in a RUSTFLAGS environment variable so it cannot be forgotten
+# on the build that gets published. Inert everywhere else: it names one target,
+# so a Linux or macOS build never reads it.
+#
+# This file is not part of the published crate, and cargo only reads a config
+# from the directory a command is run in and its ancestors, so it never affects
+# anyone who depends on `biject`.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
