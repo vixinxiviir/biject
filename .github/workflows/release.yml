@@ -188,6 +188,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
 
+    defaults:
+      run:
+        # The Windows runner's default shell is PowerShell, which does not
+        # understand `\` line continuations: it passes the backslash to cargo as
+        # an argument and then tries to run `-D warnings` as a command. Git Bash
+        # ships on every runner, so one script works on all three platforms.
+        shell: bash
+
     steps:
       - uses: actions/checkout@v4
 
