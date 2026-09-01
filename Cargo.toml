@@ -15,6 +15,11 @@ exclude = [
     # Distro packaging and CI are not consumer-facing
     "packaging/",
     ".github/",
+    # Build settings for this repository's own releases. Cargo only reads a
+    # config from the directory a command runs in and its ancestors, so a
+    # published copy would never be read by anyone — it would just be baggage
+    # that looks like it does something.
+    ".cargo/",
     # Internal planning notes — must never be published
     "*-roadmap.md",
     # Specifications handed to implementers. Working documents about work not
