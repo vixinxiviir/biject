@@ -27,7 +27,7 @@ Order matters only where "depends on" says so.
 | --- | --- | --- |
 | [1.0a-desktop-reports-what-the-cli-reports](1.0a-desktop-reports-what-the-cli-reports.md) | Landed in `5d5ab52` — code reviewed, **not yet run in the app** | — |
 | [1.0b-desktop-states-its-scope](1.0b-desktop-states-its-scope.md) | Landed in `5d5ab52` — code reviewed, **not yet run in the app** | 1.0a |
-| [1.0c-real-installers](1.0c-real-installers.md) | Open — **lead-owned**, CI | check-portable green |
+| [1.0c-real-installers](1.0c-real-installers.md) | Built — Windows `.msi` and setup `.exe` verified locally; macOS and Linux await an rc tag. Tap and bucket need their repositories created | check-portable green |
 
 **1.0a first, and it is a defect rather than a feature.** The app renders a
 foreign key as the bare word `foreign_key` and never shows the scope footer, so

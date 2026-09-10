@@ -288,7 +288,8 @@ jobs:
             libsoup-3.0-dev \
             libssl-dev \
             librsvg2-dev \
-            pkg-config
+            pkg-config \
+            file
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -331,6 +332,25 @@ jobs:
       - name: Build desktop binary
         run: cargo build --frozen --release --locked --manifest-path tauri-app/src-tauri/Cargo.toml
 
+      # Prebuilt, like cargo-about, rather than compiled on every release.
+      - name: Install Tauri CLI
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli
+
+      # `cargo build` produces the program; `cargo tauri build` produces
+      # something a person can install. tauri.conf.json already asks for every
+      # bundle format -- nothing has ever asked it to build one.
+      #
+      # APPIMAGE_EXTRACT_AND_RUN: the AppImage tool is itself an AppImage and
+      # wants FUSE, which CI runners do not provide. This makes it unpack itself
+      # and run instead, and does not affect the AppImage it produces.
+      - name: Build desktop installers
+        working-directory: tauri-app/src-tauri
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: cargo tauri build -- --locked
+
       - name: Stage release artifacts
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -342,6 +362,12 @@ jobs:
           cp packaging/aur/.SRCINFO dist/
           cp LICENSE dist/
           cp THIRD-PARTY-NOTICES.txt dist/
+          find tauri-app/src-tauri/target/release/bundle \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+            -exec cp {} dist/ \;
+          # The CLI on its own, archived, for anyone who wants it on PATH
+          # without the desktop app.
+          tar -czf "dist/biject-${VERSION}-linux-x86_64.tar.gz" -C target/release biject
           curl -L -o "dist/biject-${VERSION}.tar.gz" "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
           (
             cd dist
@@ -359,10 +385,9 @@ jobs:
         with:
           files: dist/*
 
-  # The same binaries for the platforms that have no distro packaging. Separate
-  # from linux-artifacts because almost none of that job transfers: the vendor
-  # archive, PKGBUILD, .SRCINFO and the desktop entry are all AUR-specific, and
-  # the AUR only ships Linux.
+  # Installers and a CLI archive for the platforms without distro packaging.
+  # Separate from linux-artifacts because almost none of that job transfers:
+  # the vendor archive, PKGBUILD, .SRCINFO and desktop entry are AUR-specific.
   mac-windows-artifacts:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [check, check-portable]
@@ -375,13 +400,12 @@ jobs:
           - os: windows-latest
             name: windows
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     defaults:
       run:
         # The Windows runner's default shell is PowerShell, where none of the
-        # scripts below parse. Git Bash ships on every runner, so one script
-        # works on all three platforms rather than needing a PowerShell twin.
+        # scripts below parse. Git Bash ships on every runner.
         shell: bash
 
     steps:
@@ -391,12 +415,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # A Mac sold today is Apple Silicon and the runner matches, so an
-      # unqualified build produces an arm64 binary that will not start on an
-      # Intel Mac. Both are built and merged below into one file that runs on
-      # either, which is also what makes the result testable in an x86 VM.
-      - name: Add the Intel macOS target
+      # unqualified build would be arm64 only and would not start on an Intel
+      # Mac, or in an x86 VM. Both architectures are built and merged into one
+      # universal binary, for the CLI and for the app.
+      - name: Add both macOS targets
         if: matrix.os == 'macos-latest'
-        run: rustup target add x86_64-apple-darwin
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -411,16 +435,14 @@ jobs:
           cargo fetch --locked
           cargo fetch --locked --manifest-path tauri-app/src-tauri/Cargo.toml
 
-      - name: Install cargo-about
+      - name: Install cargo-about and the Tauri CLI
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-about
+          tool: cargo-about,tauri-cli
 
-      # Regenerated per platform rather than copied from the Linux job. The
-      # dependency tree genuinely differs — rusqlite bundles SQLite here, and
-      # keyring pulls a different backend — so Linux's notices would be wrong
-      # for these binaries. If this step fails, a crate that only builds on this
-      # platform has a licence nobody has reviewed, which is worth knowing.
+      # Regenerated per platform rather than copied from the Linux job: the
+      # dependency tree genuinely differs here. If this fails, a crate that only
+      # builds on this platform has a licence nobody has reviewed.
       - name: Generate third-party notices
         run: cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
 
@@ -433,53 +455,76 @@ jobs:
             cargo build --frozen --release --locked --bin biject
           fi
 
-      - name: Build desktop binary
+      # Replaces the bare biject-gui this job used to ship. Produces a .dmg on
+      # macOS -- universal, so one file for both kinds of Mac -- and an .msi and
+      # a setup .exe on Windows. Tauri fetches the Windows installer toolchains
+      # (WiX and NSIS) itself.
+      - name: Build desktop installers
+        working-directory: tauri-app/src-tauri
         run: |
-          MANIFEST=tauri-app/src-tauri/Cargo.toml
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            cargo build --frozen --release --locked --manifest-path "$MANIFEST" --target aarch64-apple-darwin
-            cargo build --frozen --release --locked --manifest-path "$MANIFEST" --target x86_64-apple-darwin
+            cargo tauri build --target universal-apple-darwin -- --locked
           else
-            cargo build --frozen --release --locked --manifest-path "$MANIFEST"
+            cargo tauri build -- --locked
           fi
 
-      # These are plain executables, not a .app bundle or an .msi. That matches
-      # what the Linux job has always shipped, and keeps this change to one
-      # thing. Bundling needs the Tauri CLI and is worth doing separately.
       - name: Stage release artifacts
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            # lipo merges the two architectures into one universal binary.
+            # lipo merges the two CLI builds into one universal binary.
             lipo -create -output dist/biject \
               target/aarch64-apple-darwin/release/biject \
               target/x86_64-apple-darwin/release/biject
-            lipo -create -output dist/biject-gui \
-              tauri-app/src-tauri/target/aarch64-apple-darwin/release/biject-gui \
-              tauri-app/src-tauri/target/x86_64-apple-darwin/release/biject-gui
-            lipo -info dist/biject dist/biject-gui
+            lipo -info dist/biject
+            tar -czf "dist/biject-${VERSION}-macos-universal.tar.gz" -C dist biject
           else
             cp target/release/biject.exe dist/
-            cp tauri-app/src-tauri/target/release/biject-gui.exe dist/
+            # 7-Zip ships on the Windows runner; zip does not.
+            (cd dist && 7z a "biject-${VERSION}-windows-x86_64.zip" biject.exe > /dev/null)
           fi
+          find tauri-app/src-tauri/target -path '*release/bundle/*' \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \) \
+            -exec cp {} dist/ \;
           cp LICENSE dist/
           cp THIRD-PARTY-NOTICES.txt dist/
-          (cd dist && sha256sum * > sha256sums.txt)
-          cat dist/sha256sums.txt
+          ls -la dist
+          # macOS has shasum rather than sha256sum.
+          (
+            cd dist
+            if command -v sha256sum > /dev/null; then
+              sha256sum * > "sha256sums-${{ matrix.name }}.txt"
+            else
+              shasum -a 256 * > "sha256sums-${{ matrix.name }}.txt"
+            fi
+            cat "sha256sums-${{ matrix.name }}.txt"
+          )
 
-      # Proves the thing that was just built actually starts. A binary that
-      # links but cannot run is exactly what a cross-platform build produces
-      # when a system library is missing, and it would otherwise be found by
-      # whoever downloaded it.
+      # Fails the release if an installer format silently did not build. Tauri
+      # skips a bundle format it cannot produce with a warning, not an error,
+      # and a release missing its .dmg is exactly the kind of partial result
+      # that should not reach anyone.
+      - name: Confirm every installer was built
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            ls dist/*.dmg
+          else
+            ls dist/*.msi dist/*-setup.exe
+          fi
+
+      # Proves the thing just built actually starts. A binary that links but
+      # cannot run is exactly what a cross-platform build produces when a
+      # system library is missing.
       - name: Smoke-test the CLI
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            ./dist/biject --version
-            ./dist/biject schema --source examples/customers_v1.csv --target examples/customers_v2.csv
+            BIN=./dist/biject
           else
-            ./dist/biject.exe --version
-            ./dist/biject.exe schema --source examples/customers_v1.csv --target examples/customers_v2.csv
+            BIN=./dist/biject.exe
           fi
+          "$BIN" --version
+          "$BIN" schema --source examples/customers_v1.csv --target examples/customers_v2.csv
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4

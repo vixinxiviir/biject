@@ -1,0 +1,23 @@
+{
+    "version": "0.9.0",
+    "description": "Compare the schemas and rows of two databases or CSV files",
+    "homepage": "https://bijection.dev",
+    "license": "GPL-3.0-only",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/vixinxiviir/biject/releases/download/v0.9.0/biject-0.9.0-windows-x86_64.zip",
+            "hash": "REPLACE_WITH_SHA256_FROM_sha256sums-windows.txt"
+        }
+    },
+    "bin": "biject.exe",
+    "checkver": {
+        "github": "https://github.com/vixinxiviir/biject"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/vixinxiviir/biject/releases/download/v$version/biject-$version-windows-x86_64.zip"
+            }
+        }
+    }
+}
