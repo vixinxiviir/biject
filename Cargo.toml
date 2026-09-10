@@ -2,6 +2,11 @@
 name = "biject"
 version = "0.9.0"
 edition = "2021"
+# The oldest Rust this builds on, checked in CI rather than asserted. 1.88 is
+# the floor the locked dependency tree sets (the `time` crate declares it).
+# Raising it is a minor-version change, never a patch -- see "Stability" in the
+# README.
+rust-version = "1.88"
 description = "Schema-aware data and schema diff tool for CSV and SQL databases, with a Rust CLI and Tauri desktop UI"
 license = "GPL-3.0-only"
 repository = "https://github.com/vixinxiviir/biject"

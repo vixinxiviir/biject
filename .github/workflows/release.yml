@@ -179,6 +179,37 @@ jobs:
   # compile differently off Linux — rusqlite switches to bundled SQLite, and
   # keyring switches to Credential Manager and Keychain — so "it builds on
   # Linux" says nothing about whether it builds at all here.
+  # Proves the rust-version in Cargo.toml rather than asserting it. Library
+  # only: the desktop app is not published to crates.io, so nobody builds it
+  # with an old compiler, and Tauri's own floor moves independently of ours.
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SQLite and OpenSSL headers the connectors link against on Linux.
+      # None of the GUI stack is needed, since only the library is built.
+      - name: Install Linux build dependencies
+        run: |
+          sudo -E apt-get update -qq
+          sudo -E apt-get install -y --no-install-recommends             build-essential clang cmake libsqlite3-dev libssl-dev pkg-config
+
+      - name: Read the declared rust-version
+        id: msrv
+        run: echo "version=$(grep -m1 '^rust-version' Cargo.toml | cut -d '"' -f2)" >> "$GITHUB_OUTPUT"
+
+      # Read from Cargo.toml, so the number lives in exactly one place and this
+      # job cannot quietly check a different version from the one declared.
+      - name: Install the declared minimum toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - name: Check on the minimum toolchain
+        run: cargo check --locked --all-targets
+
   check-portable:
     strategy:
       # One platform failing should not hide the other's result.

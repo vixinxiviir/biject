@@ -38,12 +38,23 @@ The project currently ships in two forms:
 
 Tagged releases are the intended stable installation target. Source builds remain the most predictable cross-platform option.
 
+### From crates.io
+
+```bash
+cargo install biject --locked
+```
+
+Requires Rust 1.88 or newer. `--locked` builds against the dependency versions
+this release was tested with; without it, cargo resolves the newest compatible
+versions, which may need a newer Rust than 1.88 and have not been through this
+project's test suite.
+
 ### From Source
 
 ```bash
 git clone https://github.com/vixinxiviir/biject.git
 cd biject
-cargo install --path .
+cargo install --path . --locked
 ```
 
 This builds and installs the `biject` binary to your Cargo bin directory (usually `~/.cargo/bin`).
@@ -454,6 +465,32 @@ PostgreSQL reads them. MySQL, SQL Server and SQLite do not yet, and say so in th
 
 **Type classification seems wrong**  
 Polars infers schema from the first 100 rows. If a CSV column contains mixed types, normalize the input first so the sampled rows reflect the full dataset.
+
+## Stability
+
+These are the promises from 1.0 onward. Anything not listed here can change in
+any release.
+
+**The Rust library follows Semantic Versioning.** Nothing public is removed,
+renamed or changed in signature within 1.x. Types marked `#[non_exhaustive]` —
+the catalog, constraint, change and error types among them — can gain variants
+and fields in a minor release, because that is how a new kind of finding gets
+reported. Code that matches on them needs a wildcard arm, and should treat it
+as "something this version does not understand yet" rather than as nothing.
+
+**Exported files are an interface.** Within 1.x, `--format json` output only
+ever gains fields, never loses or renames one, and `--format csv` keeps its
+columns and their order. Code that reads either can rely on that.
+
+**Terminal output is for people, and is not stable.** Wording, layout and colour
+change whenever a report can be made clearer. Parse the exports instead.
+
+**Exit codes are stable.** `0` when the command ran and found nothing it was
+asked to fail on; non-zero when it could not run, or when `--fail-on` or a
+`--policy` rule was triggered.
+
+**The minimum Rust version is 1.88**, checked in CI. Raising it is a minor
+release, never a patch.
 
 ## Contributing
 
