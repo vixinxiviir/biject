@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms — Bijection</title>
+<meta name="description" content="The commercial licence agreement for biject migrate.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="wrap">
+
+<!-- The published copy of biject-pro/EULA.md. The two must say the same thing:
+     change that file, then this one, and bump the version line in both. -->
+
+<div class="topbar"><a href="/">Bijection</a></div>
+
+<main class="doc">
+  <h1>Bijection Commercial Licence Agreement</h1>
+  <p class="version">Version 1.0 — 20 August 2026</p>
+
+  <p>
+    This Agreement governs your use of <span class="mono">biject migrate</span> (&ldquo;the
+    Software&rdquo;), the commercial component of Bijection, licensed by Cody Byers
+    (&ldquo;we&rdquo;, &ldquo;us&rdquo;).
+  </p>
+  <p>
+    The rest of Bijection — the <span class="mono">biject</span> library, the
+    <span class="mono">schema</span>, <span class="mono">data</span> and
+    <span class="mono">batch</span> commands, and the desktop application — is free software
+    under GPL-3.0-only and is <strong>not</strong> governed by this Agreement. See
+    <a href="https://github.com/vixinxiviir/biject/blob/main/LICENSING.md">LICENSING.md</a>.
+  </p>
+  <p>
+    By installing or using the Software you accept these terms. If you do not accept them, do
+    not use the Software; if you have already paid, request a refund under
+    <a href="#refunds">section 8</a>.
+  </p>
+
+  <h2 id="permitted">1. What you may do</h2>
+  <p>We grant you a non-exclusive, non-transferable licence to use the Software:</p>
+  <ul>
+    <li><strong>For any purpose</strong>, commercial or otherwise, including in production, in
+      paid client work, and inside your own commercial products&rsquo; build pipelines.</li>
+    <li><strong>On any number of machines</strong>, including personal machines, servers, and
+      continuous-integration runners.</li>
+    <li><strong>By the number of people your tier permits.</strong> An Individual licence
+      covers one named person. Team and Enterprise licences cover the number of people stated
+      in the licence file&rsquo;s <span class="mono">seats</span> field.</li>
+  </ul>
+  <p>
+    Output belongs to you. The SQL the Software generates is yours, with no claim, royalty, or
+    attribution obligation from us — run it, commit it, publish it, sell products built with it.
+  </p>
+
+  <h2 id="prohibited">2. What you may not do</h2>
+  <ul>
+    <li>Share your licence file, or your licence key, with anyone outside the seats your tier
+      covers.</li>
+    <li>Redistribute, resell, sublicense, rent, or lend the Software itself.</li>
+    <li>Remove or defeat the licence check, or the licensee identification the Software writes
+      into the files it generates.</li>
+    <li>Reverse engineer the Software except where law grants you that right regardless of
+      contract.</li>
+  </ul>
+  <p>
+    We cannot technically prevent most of this. The licence check is a courtesy to honest
+    buyers, not a security measure, and we have deliberately not built anti-circumvention
+    machinery, telemetry, or any phone-home. This section records what is permitted; we rely
+    on you to honour it.
+  </p>
+
+  <h2 id="seats">3. Seats, and what counts as one</h2>
+  <p>
+    A seat is one human being who runs the Software, or who directs automation that runs it on
+    their behalf. Continuous integration does not consume seats: if four developers share a
+    licence and a CI pipeline runs the Software a thousand times a day, that is four seats, not
+    one thousand and four.
+  </p>
+  <p>Seats are named, not concurrent. Two people alternating on one seat is two seats.</p>
+
+  <h2 id="duration">4. What you get, and for how long</h2>
+  <p>
+    Your licence names a version ceiling and is <strong>perpetual for it</strong>. A licence
+    issued against 0.4 entitles you to run every 0.4.x release, including patch releases
+    published later, for as long as you like. We cannot revoke it, and it will not expire.
+  </p>
+  <p>
+    It does <strong>not</strong> unlock later minor or major versions. Moving to 0.5 requires a
+    new licence at whatever it then costs.
+  </p>
+  <p>There is no subscription, no renewal, and nothing to cancel.</p>
+
+  <h2 id="support">5. Support</h2>
+  <p>
+    Support is best-effort by email at
+    <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>. We aim to reply within
+    a few working days. No response time is guaranteed and none is being sold to you.
+  </p>
+  <p>
+    Bug reports for the free components belong in the
+    <a href="https://github.com/vixinxiviir/biject/issues">public issue tracker</a>, where
+    everyone benefits.
+  </p>
+
+  <h2 id="scope">6. What the Software does not do</h2>
+  <p>
+    The Software <strong>writes SQL files. It never connects to a database to execute
+    them.</strong> It reads schemas in order to compare them, and it produces a script for a
+    human to review and run.
+  </p>
+  <p>
+    You are responsible for reviewing generated SQL before running it against any system you
+    care about, and for having a backup you have tested restoring. Some generated statements
+    destroy data; those are marked, and are withheld entirely unless you pass
+    <span class="mono">--allow-destructive</span>.
+  </p>
+  <p>
+    Do not run generated DDL against production without reading it first. The Software cannot
+    know your constraints, your data volume, your replication topology, or your maintenance
+    window.
+  </p>
+
+  <h2 id="liability">7. No warranty, and limits on liability</h2>
+  <p class="caps">
+    THE SOFTWARE IS PROVIDED &ldquo;AS IS&rdquo;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+  </p>
+  <p class="caps">
+    TO THE MAXIMUM EXTENT PERMITTED BY LAW, OUR TOTAL LIABILITY UNDER THIS AGREEMENT IS LIMITED
+    TO THE AMOUNT YOU PAID FOR THE LICENCE. WE ARE NOT LIABLE FOR LOST PROFITS, LOST OR
+    CORRUPTED DATA, BUSINESS INTERRUPTION, OR ANY INDIRECT, SPECIAL, INCIDENTAL OR
+    CONSEQUENTIAL DAMAGES, EVEN IF ADVISED OF THE POSSIBILITY.
+  </p>
+  <p>
+    Some jurisdictions do not allow these exclusions. Where that is so, the above applies to the
+    greatest extent permitted, and nothing here limits liability for death or personal injury
+    caused by negligence, for fraud, or for anything else that cannot lawfully be limited.
+  </p>
+  <p>
+    Nothing in this Agreement affects statutory consumer rights you have that cannot be waived
+    by contract.
+  </p>
+
+  <h2 id="refunds">8. Refunds</h2>
+  <p>
+    <strong>If the Software does not do what you expected, ask for a refund and you will get
+    one.</strong> Email <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>
+    within 30 days of purchase. You do not need to justify the request, and you may keep any
+    SQL already generated.
+  </p>
+  <p>
+    Purchases are processed by a third-party merchant of record, who is the seller of record
+    for the transaction and handles payment and applicable taxes. Refunds are issued through
+    them, so the money returns by the route it arrived.
+  </p>
+  <p>This policy is in addition to any statutory right of withdrawal you have.</p>
+
+  <h2 id="termination">9. Termination</h2>
+  <p>
+    This Agreement ends if you materially breach it — most plainly, by redistributing the
+    Software or sharing licence keys beyond your seats — and we notify you in writing. On
+    termination you must stop using the Software and delete your copies.
+  </p>
+  <p>
+    We will not terminate for non-payment, because there is nothing recurring to not pay.
+  </p>
+  <p>Sections 7, 10 and 11 survive termination.</p>
+
+  <h2 id="law">10. Governing law</h2>
+  <p>
+    This Agreement is governed by the laws of the State of Arizona, United States of America,
+    excluding its conflict-of-law provisions, and excluding the United Nations Convention on
+    Contracts for the International Sale of Goods.
+  </p>
+
+  <h2 id="general">11. General</h2>
+  <p>
+    This Agreement is the entire agreement between us regarding the Software and supersedes any
+    prior understanding. If a provision is found unenforceable, it is replaced by the closest
+    enforceable provision and the rest stands. A failure to enforce a term on one occasion does
+    not waive it.
+  </p>
+  <p>
+    We may revise this Agreement for future licences. Changes never apply retroactively: the
+    version you received with your licence governs your licence, permanently.
+  </p>
+  <p>
+    &ldquo;Bijection&rdquo; and &ldquo;biject&rdquo; are unregistered trademarks. This
+    Agreement grants no trademark rights — see the project&rsquo;s
+    <a href="https://github.com/vixinxiviir/biject/blob/main/NOTICE">NOTICE</a> file.
+  </p>
+
+  <hr>
+  <p>Questions before buying: <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>.</p>
+</main>
+
+<footer>
+  <div class="foot-links">
+    <a href="/">Home</a>
+    <a href="terms.html">Terms</a>
+    <a href="refunds.html">Refunds</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="mailto:licensing@bijection.dev">Contact</a>
+  </div>
+  <p style="margin:0; max-width:none">Copyright © 2026 Cody Byers.</p>
+</footer>
+
+</div>
+</body>
+</html>
