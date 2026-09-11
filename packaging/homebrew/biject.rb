@@ -18,8 +18,8 @@
 class Biject < Formula
   desc "Compare the schemas and rows of two databases or CSV files"
   homepage "https://bijection.dev"
-  version "0.9.0"
-  url "https://github.com/vixinxiviir/biject/releases/download/v0.9.0/biject-0.9.0-macos-universal.tar.gz"
+  version "1.0.0"
+  url "https://github.com/vixinxiviir/biject/releases/download/v1.0.0/biject-1.0.0-macos-universal.tar.gz"
   sha256 "REPLACE_WITH_SHA256_FROM_sha256sums-macos.txt"
   license "GPL-3.0-only"
 

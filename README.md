@@ -67,9 +67,32 @@ cargo build --release --manifest-path tauri-app/src-tauri/Cargo.toml
 
 The desktop binary is produced at `tauri-app/src-tauri/target/release/biject-gui` on Linux and macOS, or `biject-gui.exe` on Windows.
 
-### Release Artifacts
+### Installers and prebuilt binaries
 
-When available, tagged releases may include prebuilt artifacts for the CLI, the desktop app, and packaging support files. If a release does not include a binary for your platform yet, use the source build instructions above.
+Every [GitHub release](https://github.com/vixinxiviir/biject/releases) carries:
+
+| Platform | Desktop app | Command line |
+| --- | --- | --- |
+| Windows | `.msi` or `-setup.exe` | `biject-<version>-windows-x86_64.zip` |
+| macOS (Apple Silicon and Intel) | `.dmg` | `biject-<version>-macos-universal.tar.gz` |
+| Linux | `.deb`, `.rpm` or `.AppImage` | `biject-<version>-linux-x86_64.tar.gz` |
+
+The installers install the desktop app only. For `biject` on your `PATH`, unpack
+the command-line archive somewhere on it, or use crates.io or the AUR.
+
+**None of these are code-signed.** On Windows, SmartScreen says "Windows
+protected your PC": choose **More info**, then **Run anyway**. On macOS the
+first launch is blocked: open **System Settings → Privacy & Security** and click
+**Open Anyway** (on macOS 14 and earlier, Control-click the app and choose
+**Open**). For the command-line binary on macOS, run
+`xattr -d com.apple.quarantine biject` once after unpacking. Each release
+publishes SHA-256 checksums beside the files.
+
+### Arch Linux
+
+```bash
+yay -S biject
+```
 
 ### Linux Runtime Dependencies
 

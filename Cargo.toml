@@ -1,6 +1,6 @@
 [package]
 name = "biject"
-version = "0.9.0"
+version = "1.0.0"
 edition = "2021"
 # The oldest Rust this builds on, checked in CI rather than asserted. 1.88 is
 # the floor the locked dependency tree sets (the `time` crate declares it).

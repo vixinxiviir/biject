@@ -12,6 +12,46 @@ Bijection was called `datadiff` before 0.3.0. See [MIGRATING.md](MIGRATING.md).
 
 ---
 
+## [1.0.0] — 2026-09-10
+
+1.0 is a promise more than a feature list. The README's **Stability** section
+says what it covers: the library follows Semantic Versioning, `--format json`
+and `--format csv` are interfaces that only grow, exit codes are fixed, and
+terminal output is for people and may change. The API is the one 0.9.0 froze;
+nothing was removed or renamed to get here.
+
+### Added
+
+- **Installers for Windows, macOS and Linux.** Every release now carries an
+  `.msi` and a setup `.exe`, a universal `.dmg` that runs on Apple Silicon and
+  Intel Macs, and `.deb`, `.rpm` and `.AppImage` packages. The command-line tool
+  gets its own archive per platform. Until now every release binary was Linux.
+
+  **None of them are code-signed.** Windows SmartScreen and macOS Gatekeeper
+  both warn on first launch; the README says what to click. Signing costs a
+  yearly certificate on each platform, and saying so plainly is the honest
+  answer until that is worth paying for.
+- **The desktop app reports foreign keys in full** — columns, the table and
+  columns they point at, and both referential actions. 0.9.0 read them, but the
+  app rendered one as the bare word `foreign_key`, reported the change as
+  breaking, and gave no way to tell which key it was.
+- **The desktop app says what it never examines**, as the command line has
+  since 0.9.0. A clean result in the window now carries the same qualification
+  as a clean result in a terminal.
+- **The desktop app says what it does not do.** Batch manifests, `--policy`
+  contracts and exports are command-line only; the app now names them rather
+  than leaving someone to look for them.
+- **A declared minimum Rust version, 1.88**, checked in CI on every push.
+  Raising it will be a minor release, never a patch.
+
+### Changed
+
+- `cargo install biject --locked` is the documented install. Without `--locked`,
+  cargo picks the newest compatible dependencies, which may need a newer Rust
+  and have not been through this project's tests.
+
+---
+
 ## [0.9.0] — 2026-08-29
 
 ### Added
@@ -321,7 +361,9 @@ First tagged release, as `datadiff`. Schema comparison, keyed row diffs, batch
 manifests, schema policies, and a Tauri desktop app with connectors for SQL
 Server, PostgreSQL, MySQL/MariaDB and SQLite.
 
-[Unreleased]: https://github.com/vixinxiviir/biject/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/vixinxiviir/biject/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/vixinxiviir/biject/compare/v0.9.0...v1.0.0
+[0.9.0]: https://github.com/vixinxiviir/biject/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/vixinxiviir/biject/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/vixinxiviir/biject/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vixinxiviir/biject/compare/v0.4.0...v0.5.0
