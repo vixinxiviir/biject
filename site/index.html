@@ -33,6 +33,10 @@
     <a class="btn btn-primary" href="#install">Install</a>
     <a class="btn btn-secondary" href="https://github.com/vixinxiviir/biject">Source on GitHub</a>
   </div>
+  <p class="cta-note">
+    Version 1.0 is out, with installers for Windows, macOS and Linux —
+    <a href="https://github.com/vixinxiviir/biject/releases/tag/v1.0.0">what&rsquo;s new</a>.
+  </p>
 </header>
 
 <section>
@@ -91,15 +95,25 @@ Compatibility:
 
 <section id="install">
   <h2>Install</h2>
+  <h3>Installers</h3>
+  <p class="muted">
+    From the <a href="https://github.com/vixinxiviir/biject/releases/latest">latest release</a>:
+    an <span class="mono">.msi</span> or setup <span class="mono">.exe</span> for Windows, a
+    <span class="mono">.dmg</span> for macOS that runs on Apple Silicon and Intel, and
+    <span class="mono">.deb</span>, <span class="mono">.rpm</span> or
+    <span class="mono">.AppImage</span> for Linux. These install the desktop app; the
+    command-line tool is a separate archive on the same page.
+  </p>
+  <p class="muted" style="font-size:14.5px">
+    They are not code-signed, so Windows and macOS warn the first time. On Windows choose
+    <strong>More info</strong>, then <strong>Run anyway</strong>. On macOS open
+    <strong>System Settings → Privacy &amp; Security</strong> and click
+    <strong>Open Anyway</strong>.
+  </p>
   <h3>From crates.io</h3>
-<pre><span class="p">$</span> cargo install biject</pre>
+<pre><span class="p">$</span> cargo install biject --locked</pre>
   <h3>Arch Linux</h3>
 <pre><span class="p">$</span> yay -S biject</pre>
-  <h3>Prebuilt binaries</h3>
-  <p class="muted">
-    Linux binaries for the CLI and desktop app are attached to every
-    <a href="https://github.com/vixinxiviir/biject/releases">GitHub release</a>.
-  </p>
 </section>
 
 <section>
@@ -162,14 +176,19 @@ ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;
     of the version you bought, forever.
   </p>
   <div class="cta-row">
-    <!-- No checkout yet. Replace this with the merchant-of-record buy button
-         when licences go on sale; a CTA that goes nowhere is worse than none. -->
+    <!-- CHECKOUT: when the Lemon Squeezy link exists, replace the <span> below
+         with this, and delete the "Want one before then" paragraph:
+         <a class="btn btn-primary" href="LEMON_SQUEEZY_CHECKOUT_URL">Buy — $39</a>
+         A button that goes nowhere is worse than none, so it stays a span until then. -->
     <span class="btn btn-secondary" aria-disabled="true">Licences available soon</span>
     <span class="cta-note"><a href="refunds.html">30-day refund</a>, no questions asked.</span>
   </div>
   <p class="muted" style="font-size:14.5px">
-    Sold under the <a href="terms.html">commercial licence agreement</a>. Payment is handled
-    by Lemon Squeezy; your licence arrives by email.
+    For Windows, macOS (Apple Silicon and Intel) and Linux. The download is the whole of
+    Bijection plus <span class="mono">migrate</span>, and replaces the free
+    <span class="mono">biject</span>. Payment is handled by Lemon Squeezy; your licence
+    arrives by email, within 24 hours, issued to the address you check out with. Sold under
+    the <a href="terms.html">commercial licence agreement</a>.
   </p>
   <p class="muted" style="font-size:14.5px">
     Want one before then, or have a question?
@@ -188,19 +207,22 @@ ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;
     are never guessing what a green tick covered.
   </p>
   <div class="honest">
-    <h3>Near term</h3>
+    <h3>Done for 1.0</h3>
     <ul>
-      <li><strong>Foreign keys everywhere.</strong> PostgreSQL reads them today; MySQL, SQL Server and SQLite say plainly that they do not yet, rather than reporting an empty list.</li>
+      <li><strong>Foreign keys on every engine</strong> — columns, the table they point at, and what happens on delete and update.</li>
       <li><strong>A report that names what it never examines</strong>, so a clean result tells you how much it covered.</li>
-      <li><strong>Release binaries for macOS and Windows</strong> alongside Linux.</li>
-      <li><strong>The desktop app brought level with the CLI</strong>, or a plain statement of what it does not cover.</li>
-      <li><strong>A documented, stable public API</strong> for 1.0.</li>
+      <li><strong>Installers for Windows, macOS and Linux.</strong></li>
+      <li><strong>A desktop app that says what it leaves to the command line</strong>, instead of leaving you to look for it.</li>
+      <li><strong>Stability promises</strong> — a semver library, and JSON and CSV exports that only ever grow.</li>
     </ul>
   </div>
   <div class="honest" style="margin-top:14px">
+    <h3>Next</h3>
+    <ul>
+      <li><strong>Checksum and sampling comparison</strong> for warehouse-scale tables — the gate on everything below.</li>
+    </ul>
     <h3>Later</h3>
     <ul>
-      <li><strong>Checksum and sampling comparison</strong> for warehouse-scale tables — the gate on everything else here.</li>
       <li><strong>Cloud warehouse connectors</strong> — Snowflake, Databricks, BigQuery.</li>
       <li><strong>Cross-engine schema diff</strong> and type mapping.</li>
     </ul>

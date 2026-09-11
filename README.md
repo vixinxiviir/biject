@@ -537,17 +537,20 @@ The project name is covered by the [NOTICE](NOTICE) file, not by the GPL.
 
 ## Roadmap
 
-Near term:
+Done for 1.0:
 
-- [ ] Foreign keys in schema comparison for every engine — PostgreSQL reads them today
-- [ ] A report that names what it never examines, so a clean result says how much it covered
-- [ ] Release binaries for macOS and Windows alongside Linux
-- [ ] Desktop app level with the CLI, or a plain statement of what it does not cover
-- [ ] A documented, stable public API for 1.0
+- [x] Foreign keys in schema comparison on every engine
+- [x] A report that names what it never examines, so a clean result says how much it covered
+- [x] Installers for Windows, macOS and Linux
+- [x] The desktop app says plainly what it leaves to the command line
+- [x] A documented public API, with stability promises (see [Stability](#stability))
+
+Next:
+
+- [ ] Checksum and sampling comparison for warehouse-scale tables — the gate on everything below
 
 Later:
 
-- [ ] Checksum and sampling comparison for warehouse-scale tables — the gate on everything below
 - [ ] Cloud warehouse connectors (Snowflake, Databricks, BigQuery)
 - [ ] Cross-engine schema diff and type mapping
 
