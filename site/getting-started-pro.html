@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started with Bijection Pro</title>
+<meta name="description" content="What happens after you buy Bijection Pro: your licence, installing, and checking it works.">
+<!-- Reached from the Lemon Squeezy receipt, not from the landing page. -->
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="wrap">
+
+<!-- Mirrors biject-pro/packaging/INSTALL.txt, which ships inside every
+     download. Change one, change the other. -->
+
+<div class="topbar"><a href="/">Bijection</a></div>
+
+<main class="doc">
+  <h1>Getting started with Bijection Pro</h1>
+  <p class="version">Thank you for buying it.</p>
+
+  <p>
+    There is nothing to activate and no account to create. Bijection Pro is two things: the
+    program, which you can download from your receipt now, and a licence file, which is sent
+    to you separately.
+  </p>
+
+  <h2>1. Your licence</h2>
+  <p>
+    <strong>It arrives by email within 24 hours</strong>, sent to the address you checked out
+    with. Each licence is issued by hand, which is why it is not instant. You do not need to
+    do anything to request it.
+  </p>
+  <p>
+    That email address is written into your licence, and into a comment at the top of every
+    SQL file <span class="mono">migrate</span> generates. If you would rather it named a
+    different address — a team alias, say — email
+    <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a> with your order
+    number, ideally before your licence arrives. It can be reissued later too.
+  </p>
+  <p>
+    Nothing after a day? Check your spam folder, then write to the same address.
+  </p>
+
+  <h2>2. Install the program</h2>
+  <p>
+    The download is the whole of Bijection plus <span class="mono">migrate</span>. It
+    replaces the free <span class="mono">biject</span> if you have one: put it earlier on your
+    <span class="mono">PATH</span>, or remove the free one.
+  </p>
+  <ul>
+    <li><strong>Windows:</strong> move <span class="mono">biject.exe</span> into a folder on
+      your <span class="mono">PATH</span>.</li>
+    <li><strong>macOS:</strong> it is not code-signed, so clear the download quarantine once,
+      then move it onto your <span class="mono">PATH</span>:
+<pre><span class="p">$</span> xattr -d com.apple.quarantine biject
+<span class="p">$</span> sudo mv biject /usr/local/bin/</pre>
+      It runs on both Apple Silicon and Intel Macs.</li>
+    <li><strong>Linux:</strong>
+<pre><span class="p">$</span> sudo install -m 755 biject /usr/local/bin/</pre>
+      It needs glibc 2.35 or newer, OpenSSL 3 and SQLite: Ubuntu 22.04, Debian 12,
+      Fedora 36, current Arch, or later.</li>
+  </ul>
+<pre><span class="p">$</span> biject --version</pre>
+
+  <h2>3. Install your licence</h2>
+  <p>
+    When it arrives, save it with no file extension at the path for your system, creating the
+    <span class="mono">biject</span> folder if needed:
+  </p>
+  <div class="table-scroll">
+  <table>
+    <tbody>
+      <tr><td>Windows</td><td class="mono">%APPDATA%\biject\license</td></tr>
+      <tr><td>macOS</td><td class="mono">~/Library/Application Support/biject/license</td></tr>
+      <tr><td>Linux</td><td class="mono">~/.config/biject/license</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Or keep it anywhere and pass <span class="mono">--license &lt;FILE&gt;</span>. Then check it:</p>
+<pre><span class="p">$</span> biject license</pre>
+  <p>
+    It prints who the licence is for and whether it covers this version. The check happens on
+    your machine and sends nothing anywhere, so it works offline and on build servers. If it
+    says the licence could not be verified, it was almost certainly damaged in copying; reply to
+    the licence email for a fresh copy.
+  </p>
+
+  <h2>4. Use it</h2>
+<pre><span class="p">$</span> biject migrate --help</pre>
+  <p>
+    <span class="mono">migrate</span> writes SQL to a file and never runs it. Read what it
+    writes before running it anywhere that matters.
+  </p>
+
+  <hr>
+  <p>
+    Questions: <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>.
+    Not what you expected? <a href="refunds.html">Refunds within 30 days</a>, no questions asked.
+  </p>
+</main>
+
+<footer>
+  <div class="foot-links">
+    <a href="/">Home</a>
+    <a href="terms.html">Terms</a>
+    <a href="refunds.html">Refunds</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="mailto:licensing@bijection.dev">Contact</a>
+  </div>
+  <p style="margin:0; max-width:none">Copyright © 2026 Cody Byers.</p>
+</footer>
+
+</div>
+</body>
+</html>
