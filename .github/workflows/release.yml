@@ -359,8 +359,12 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          cp target/release/biject dist/
-          cp tauri-app/src-tauri/target/release/biject-gui dist/
+          # Deliberately not the bare `biject` or `biject-gui`. Release assets
+          # are one flat namespace, so a file named `biject` from here and one
+          # from the macOS job are the same asset: in 1.0.0 the macOS universal
+          # binary overwrote the Linux one, and anyone who downloaded `biject`
+          # on Linux got a Mach-O. Every platform ships archives and installers
+          # whose names carry the platform.
           cp packaging/aur/biject.desktop dist/
           cp packaging/aur/PKGBUILD dist/
           cp packaging/aur/.SRCINFO dist/
@@ -380,6 +384,13 @@ jobs:
               sha256sum "biject-${VERSION}.tar.gz" "biject-vendor-${VERSION}.tar.zst" > aur-sha256sums.txt
             )
           fi
+          # Checksums for everything this job ships, as the other job does for
+          # its own platforms.
+          (
+            cd dist
+            sha256sum * > "sha256sums-linux.txt"
+            cat "sha256sums-linux.txt"
+          )
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -480,17 +491,20 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
+          # The binary is staged outside dist/ so only the archive becomes a
+          # release asset; a bare `biject` would collide with the Linux job's.
+          mkdir -p stage
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
             # lipo merges the two CLI builds into one universal binary.
-            lipo -create -output dist/biject \
+            lipo -create -output stage/biject \
               target/aarch64-apple-darwin/release/biject \
               target/x86_64-apple-darwin/release/biject
-            lipo -info dist/biject
-            tar -czf "dist/biject-${VERSION}-macos-universal.tar.gz" -C dist biject
+            lipo -info stage/biject
+            tar -czf "dist/biject-${VERSION}-macos-universal.tar.gz" -C stage biject
           else
-            cp target/release/biject.exe dist/
+            cp target/release/biject.exe stage/
             # 7-Zip ships on the Windows runner; zip does not.
-            (cd dist && 7z a "biject-${VERSION}-windows-x86_64.zip" biject.exe > /dev/null)
+            (cd stage && 7z a "../dist/biject-${VERSION}-windows-x86_64.zip" biject.exe > /dev/null)
           fi
           find tauri-app/src-tauri/target -path '*release/bundle/*' \
             \( -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \) \
@@ -527,9 +541,9 @@ jobs:
       - name: Smoke-test the CLI
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            BIN=./dist/biject
+            BIN=./stage/biject
           else
-            BIN=./dist/biject.exe
+            BIN=./stage/biject.exe
           fi
           "$BIN" --version
           "$BIN" schema --source examples/customers_v1.csv --target examples/customers_v2.csv
