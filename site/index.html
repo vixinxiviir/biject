@@ -266,8 +266,8 @@ ALTER TABLE "accounts" ALTER COLUMN "id" TYPE bigint USING "id"::bigint;</pre>
   // Both are public by design. The client-side token (Developer tools >
   // Authentication > Client-side tokens) is meant to sit in page source.
   // The API key is a secret and must never go in this file.
-  const PADDLE_CLIENT_TOKEN = "";  // live token
-  const PADDLE_PRICE_ID = "";      // pri_...
+  const PADDLE_CLIENT_TOKEN = "live_0a41ecd95378d3c5b8adf17ca9b";
+  const PADDLE_PRICE_ID = "pri_01m2f61znqwwmje6wbq16m3gta";
 
   (function () {
     const configured = PADDLE_CLIENT_TOKEN !== ""
