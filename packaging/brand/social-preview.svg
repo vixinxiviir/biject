@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="Bijection: schema and data diffs for SQL databases">
+  <title>Bijection</title>
+  <!--
+    GitHub's repository social preview, 1280 by 640. The icon is inlined from
+    site/icon.svg (its ids prefixed), because a PNG export cannot load an
+    external image. Change the icon there first, then copy it here.
+  -->
+  <defs>
+    <clipPath id="sp-left-half"><polygon points="0,0 100.95,0 27.05,128 0,128"/></clipPath>
+    <clipPath id="sp-right-half"><polygon points="100.95,0 128,0 128,128 27.05,128"/></clipPath>
+    <g id="sp-table">
+      <rect x="26" y="30" width="76" height="68" rx="9" fill="#ffffff"/>
+      <path d="M26 39 a9 9 0 0 1 9 -9 h58 a9 9 0 0 1 9 9 v8 h-76 z" fill="#b9d3fb"/>
+      <path d="M26 47 H102 M26 64 H102 M26 81 H102 M51 30 V98 M77 30 V98"
+            stroke="#1f6feb" stroke-width="3" fill="none"/>
+    </g>
+  </defs>
+
+  <rect width="1280" height="640" fill="#0f1214"/>
+
+  <!-- Icon, 288 px square. -->
+  <svg x="112" y="176" width="288" height="288" viewBox="0 0 128 128">
+    <rect width="128" height="128" rx="28" fill="#1f6feb"/>
+    <g transform="translate(-5.30 6.18)"><use href="#sp-table" clip-path="url(#sp-left-half)"/></g>
+    <g transform="translate(5.30 -6.18)"><use href="#sp-table" clip-path="url(#sp-right-half)"/></g>
+  </svg>
+
+  <g font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Inter, Roboto, Helvetica, Arial, sans-serif">
+    <text x="452" y="300" font-size="108" font-weight="700" fill="#e8eaed" letter-spacing="-2">Bijection</text>
+    <text x="456" y="368" font-size="38" fill="#c9d1d9">Schema and data diffs for SQL databases</text>
+    <text x="456" y="430" font-size="27" fill="#9aa4af">PostgreSQL · MySQL · SQL Server · SQLite · CSV</text>
+    <text x="456" y="486" font-size="27" font-weight="600" fill="#4d9bff">bijection.dev</text>
+  </g>
+</svg>
