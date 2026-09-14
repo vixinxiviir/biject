@@ -155,13 +155,14 @@ Compatibility:
 -- columns, replace this with a DROP and an ADD.</span>
 ALTER TABLE "accounts" RENAME COLUMN "email_address" TO "email";
 
-ALTER TABLE "accounts" ADD COLUMN "created" TEXT;
+ALTER TABLE "accounts" ADD COLUMN "created" timestamp with time zone DEFAULT now() NOT NULL;
 
-<span class="c">-- Was DOUBLE PRECISION. Verify the cast succeeds on real data.</span>
-ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;</pre>
+<span class="c">-- Was integer. A widening: every existing value still fits.</span>
+ALTER TABLE "accounts" ALTER COLUMN "id" TYPE bigint USING "id"::bigint;</pre>
   <p class="muted">
-    Destructive statements are withheld unless you ask for them with
-    <span class="mono">--allow-destructive</span>, and are reported either way.
+    Anything that can lose data — a dropped column, or a type change that could round or
+    truncate a value — is withheld unless you ask for it with
+    <span class="mono">--allow-destructive</span>, and is reported either way.
     <strong>Bijection never executes SQL.</strong> It writes a file for you to read.
   </p>
 </section>
@@ -178,22 +179,24 @@ ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;
     of the version you bought, forever.
   </p>
   <div class="cta-row">
-    <!-- CHECKOUT: when the Lemon Squeezy link exists, replace the <span> below
-         with this, and delete the "Want one before then" paragraph:
-         <a class="btn btn-primary" href="LEMON_SQUEEZY_CHECKOUT_URL">Buy — $39</a>
-         A button that goes nowhere is worse than none, so it stays a span until then. -->
-    <span class="btn btn-secondary" aria-disabled="true">Licences available soon</span>
+    <!-- Replaced by a "Buy — $39" button by the checkout script at the end of this
+         page, once its two live Paddle values are filled in. Until then, and for
+         anyone whose browser blocks Paddle's script, it stays a disabled label: a
+         button that goes nowhere is worse than none. -->
+    <span id="buy-slot" class="btn btn-secondary" aria-disabled="true">Licences available soon</span>
     <span class="cta-note"><a href="refunds.html">30-day refund</a>, no questions asked.</span>
   </div>
   <p class="muted" style="font-size:14.5px">
     For Windows, macOS (Apple Silicon and Intel) and Linux. The download is the whole of
     Bijection plus <span class="mono">migrate</span>, and replaces the free
-    <span class="mono">biject</span>. Payment is handled by Lemon Squeezy; your licence
+    <span class="mono">biject</span>. Checkout and payment are handled by Paddle, who sell it
+    as merchant of record, so the charge shows as Paddle on your statement. Your licence
     arrives by email, within 24 hours, issued to the address you check out with. Sold under
     the <a href="terms.html">commercial licence agreement</a>.
   </p>
   <p class="muted" style="font-size:14.5px">
-    Want one before then, or have a question?
+    <span id="buy-before">Want one before then, or have a question?</span>
+    <span id="buy-after" hidden>Questions?</span>
     <a href="mailto:licensing@bijection.dev">licensing@bijection.dev</a>.
   </p>
 </section>
@@ -255,5 +258,42 @@ ALTER TABLE "accounts" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT;
 </footer>
 
 </div>
+<!-- Checkout. bijection.dev/ is Paddle's default payment link, so this page must
+     load Paddle.js: a link ending ?_ptxn=... opens its checkout here by itself. -->
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+<script>
+  // From the LIVE Paddle account, not sandbox; the two share nothing.
+  // Both are public by design. The client-side token (Developer tools >
+  // Authentication > Client-side tokens) is meant to sit in page source.
+  // The API key is a secret and must never go in this file.
+  const PADDLE_CLIENT_TOKEN = "";  // live token
+  const PADDLE_PRICE_ID = "";      // pri_...
+
+  (function () {
+    const configured = PADDLE_CLIENT_TOKEN !== ""
+      && !PADDLE_CLIENT_TOKEN.startsWith("test_")
+      && PADDLE_PRICE_ID.startsWith("pri_");
+    // Unconfigured, or Paddle.js blocked by an extension: leave the label.
+    if (!configured || typeof Paddle === "undefined") return;
+
+    Paddle.Initialize({ token: PADDLE_CLIENT_TOKEN });
+
+    const button = document.createElement("a");
+    button.href = "#";
+    button.className = "btn btn-primary";
+    button.textContent = "Buy — $39";
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      Paddle.Checkout.open({
+        items: [{ priceId: PADDLE_PRICE_ID, quantity: 1 }],
+        settings: { successUrl: "https://bijection.dev/getting-started-pro" },
+      });
+    });
+    document.getElementById("buy-slot").replaceWith(button);
+    document.getElementById("buy-before").hidden = true;
+    document.getElementById("buy-after").hidden = false;
+  })();
+</script>
+
 </body>
 </html>
