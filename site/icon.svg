@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Bijection">
+  <title>Bijection</title>
+  <!--
+    A table cut in two by a straight line through its centre, about 60 degrees
+    from horizontal, so the cut crosses the top and bottom edges rather than
+    the corners. The halves slide apart along the cut (right half up, left
+    half down), with a narrow gap across it so the cut reads at small sizes.
+      cut:    (27.05,128) to (100.95,0), direction u = (0.5, -0.866)
+      slide:  8 units each way along u
+      gap:    1.5 units each way along n = (0.866, 0.5)
+      right half: +8u +1.5n = ( 5.30, -6.18)
+      left half:  -8u -1.5n = (-5.30,  6.18)
+  -->
+  <defs>
+    <clipPath id="left-half"><polygon points="0,0 100.95,0 27.05,128 0,128"/></clipPath>
+    <clipPath id="right-half"><polygon points="100.95,0 128,0 128,128 27.05,128"/></clipPath>
+    <g id="table">
+      <rect x="26" y="30" width="76" height="68" rx="9" fill="#ffffff"/>
+      <!-- Header row. -->
+      <path d="M26 39 a9 9 0 0 1 9 -9 h58 a9 9 0 0 1 9 9 v8 h-76 z" fill="#b9d3fb"/>
+      <!-- Grid: header boundary, two row lines, two column lines. -->
+      <path d="M26 47 H102 M26 64 H102 M26 81 H102 M51 30 V98 M77 30 V98"
+            stroke="#1f6feb" stroke-width="3" fill="none"/>
+    </g>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#1f6feb"/>
+  <g transform="translate(-5.30 6.18)"><use href="#table" clip-path="url(#left-half)"/></g>
+  <g transform="translate(5.30 -6.18)"><use href="#table" clip-path="url(#right-half)"/></g>
+</svg>
